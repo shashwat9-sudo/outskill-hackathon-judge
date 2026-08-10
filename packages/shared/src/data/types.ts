@@ -1,0 +1,597 @@
+/**
+ * Entity types.
+ *
+ * These mirror the tables in docs/DATABASE_ERD.md. Both the memory driver
+ * (demo mode) and the postgres driver (Phase 2) produce exactly these shapes,
+ * so application code cannot tell which backend it is running on.
+ */
+
+import type { RubricCategoryKey, EvidenceSource } from '../rubric/index.js';
+import type { AssessmentStage, CohortStatus, SubmissionStatus } from '../domain/status.js';
+import type { DisqualificationReason } from '../domain/disqualification.js';
+import type { ConsistencyTrigger } from '../domain/ranking.js';
+import type { TestStep } from '../testing/dsl.js';
+
+export type Actor = 'shared-admin' | 'participant' | 'system' | 'worker';
+
+// --------------------------------------------------------------------------
+// Admin
+// --------------------------------------------------------------------------
+
+export interface AdminAccount {
+  id: string;
+  username: string;
+  passwordHash: string;
+  passwordUpdatedAt: Date;
+  failedAttempts: number;
+  lockedUntil: Date | null;
+  lastLoginAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface AdminSession {
+  id: string;
+  adminId: string;
+  sessionTokenHash: string;
+  csrfToken: string;
+  issuedAt: Date;
+  expiresAt: Date;
+  rotatedFrom: string | null;
+  ipHash: string | null;
+  userAgentHash: string | null;
+  revokedAt: Date | null;
+}
+
+// --------------------------------------------------------------------------
+// Cohort and ideas
+// --------------------------------------------------------------------------
+
+export interface Cohort {
+  id: string;
+  name: string;
+  code: string;
+  description: string;
+  timezone: string;
+  day12StartAt: Date;
+  day13DeadlineAt: Date;
+  shortlistTarget: number;
+  submissionInstructions: string;
+  rubricVersion: string;
+  assessmentConfig: AssessmentConfig;
+  status: CohortStatus;
+  finalisedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface AssessmentConfig {
+  workerConcurrency: number;
+  browserBudgetMs: number;
+  maxAttempts: number;
+  retryBackoffMs: number;
+  gracePeriodMs: number;
+  consistencyTopN: number;
+  lowConfidenceThreshold: number;
+  modelVersion: string;
+  promptVersion: string;
+}
+
+export interface CohortIdea {
+  id: string;
+  cohortId: string;
+  title: string;
+  slug: string;
+  description: string;
+  targetUser: string;
+  expectedUseCase: string;
+  /** The minimum flow a compliant implementation must support — drives test planning. */
+  minimumCoreFlow: string[];
+  expectedEntities: string[];
+  aiOpportunity: string;
+  allowedScope: string;
+  unsafeInterpretations: string;
+  displayOrder: number;
+  isActive: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+// --------------------------------------------------------------------------
+// Teams
+// --------------------------------------------------------------------------
+
+export interface Team {
+  id: string;
+  cohortId: string;
+  groupNumber: number;
+  leadName: string;
+  leadEmail: string;
+  leadPhone: string;
+  status: 'active' | 'withdrawn';
+  importedAt: Date;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface TeamMember {
+  id: string;
+  teamId: string;
+  fullName: string;
+  contribution: string;
+  displayOrder: number;
+  isActive: boolean;
+}
+
+export interface TeamInvite {
+  id: string;
+  teamId: string;
+  tokenHash: string;
+  tokenPrefix: string;
+  issuedAt: Date;
+  expiresAt: Date | null;
+  revokedAt: Date | null;
+  lastAccessedAt: Date | null;
+  accessCount: number;
+}
+
+// --------------------------------------------------------------------------
+// Submissions
+// --------------------------------------------------------------------------
+
+export interface Submission {
+  id: string;
+  cohortId: string;
+  teamId: string;
+  status: SubmissionStatus;
+  ideaId: string | null;
+
+  productName: string | null;
+  primaryUser: string | null;
+  exactProblem: string | null;
+  oneSentencePromise: string | null;
+  briefDescription: string | null;
+  whyAiNecessary: string | null;
+  differentiation: string | null;
+  mustHaveWorkflow: string | null;
+  shouldHaveFeatures: string[];
+  excludedFeatures: string | null;
+
+  productUrl: string | null;
+  loginRequired: boolean;
+  coreTestSteps: { action: string; expectedResult: string }[];
+  safeSampleInputs: string | null;
+  resetInstructions: string | null;
+  knownLimitations: string | null;
+
+  bugsFixed: { description: string; howFixed: string }[];
+  deliberatelyExcluded: string | null;
+  majorTradeoff: string | null;
+  day12ToDay13Changes: string | null;
+  mostImportantLearning: string | null;
+  nextSevenDayPlan: string | null;
+  builderStack: string | null;
+  apisUsed: string | null;
+  externalTemplates: string | null;
+
+  /** Raw autosaved draft, kept separate from the promoted columns. */
+  draftPayload: Record<string, unknown>;
+  draftUpdatedAt: Date | null;
+  submittedAt: Date | null;
+  receiptId: string | null;
+  lockedAt: Date | null;
+  reopenedAt: Date | null;
+  reopenedReason: string | null;
+  isLate: boolean;
+  hasLateException: boolean;
+
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export type ArtifactKind = 'deck_pdf' | 'demo_video' | 'transcript' | 'screenshot';
+
+export interface SubmissionArtifact {
+  id: string;
+  submissionId: string;
+  kind: ArtifactKind;
+  storageBucket: string | null;
+  storagePath: string | null;
+  originalFilename: string | null;
+  mimeType: string | null;
+  byteSize: number | null;
+  checksumSha256: string | null;
+  externalUrl: string | null;
+  uploadCompletedAt: Date | null;
+  isAccessible: boolean | null;
+  lastCheckedAt: Date | null;
+  createdAt: Date;
+}
+
+/** Stored ciphertext only. There is no plaintext field anywhere in this type. */
+export interface SubmissionCredentials {
+  id: string;
+  submissionId: string;
+  usernameCiphertext: string | null;
+  passwordCiphertext: string | null;
+  loginInstructionsCiphertext: string | null;
+  keyVersion: number;
+  deletedAt: Date | null;
+  lastRevealedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface SubmissionDeclarations {
+  id: string;
+  submissionId: string;
+  builtDuringHackathon: boolean;
+  ownedByTeam: boolean;
+  externalMaterialDisclosed: boolean;
+  judgeMayModifyDemoData: boolean;
+  noRealCustomerData: boolean;
+  urlsAvailableThroughJudging: boolean;
+  permissionToSubmit: boolean;
+  acceptedAt: Date | null;
+  acceptedIpHash: string | null;
+}
+
+export interface SubmissionEvent {
+  id: string;
+  submissionId: string;
+  eventType: string;
+  actorType: Actor;
+  detail: Record<string, unknown>;
+  createdAt: Date;
+}
+
+// --------------------------------------------------------------------------
+// Assessment
+// --------------------------------------------------------------------------
+
+export interface AssessmentJob {
+  id: string;
+  submissionId: string;
+  cohortId: string;
+  stage: AssessmentStage;
+  priority: number;
+  attemptCount: number;
+  maxAttempts: number;
+  claimedBy: string | null;
+  claimedAt: Date | null;
+  leaseExpiresAt: Date | null;
+  heartbeatAt: Date | null;
+  startedAt: Date | null;
+  completedAt: Date | null;
+  lastError: string | null;
+  nextAttemptAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export type PreflightStatus = 'pass' | 'fail' | 'warn' | 'skipped';
+export type FailureClass = 'timeout' | 'dns' | 'auth' | 'server' | 'blocked' | 'invalid' | 'none';
+
+export interface PreflightCheck {
+  id: string;
+  jobId: string;
+  checkKey: string;
+  status: PreflightStatus;
+  attemptNumber: number;
+  failureClass: FailureClass;
+  detail: Record<string, unknown>;
+  checkedAt: Date;
+}
+
+export interface ArtifactAnalysis {
+  id: string;
+  jobId: string;
+  deckPageCount: number | null;
+  deckTextExtracted: boolean;
+  deckAnalysis: Record<string, unknown>;
+  videoAnalysisLimited: boolean;
+  videoLimitationReason: string | null;
+  transcriptAvailable: boolean;
+  writtenAnalysis: Record<string, unknown>;
+  injectionFlags: InjectionFlag[];
+  modelVersion: string;
+  promptVersion: string;
+  createdAt: Date;
+}
+
+export interface InjectionFlag {
+  source: 'deck' | 'written' | 'website';
+  pattern: string;
+  excerpt: string;
+  severity: 'low' | 'medium' | 'high';
+}
+
+export interface TestPlan {
+  id: string;
+  jobId: string;
+  generatedFrom: Record<string, unknown>;
+  stepCount: number;
+  estimatedDurationMs: number;
+  modelVersion: string;
+  promptVersion: string;
+  validationStatus: 'valid' | 'partial' | 'rejected';
+  rejectedSteps: { index: number; reason: string; raw: string }[];
+  summary: string | null;
+  createdAt: Date;
+}
+
+export interface TestPlanStep {
+  id: string;
+  testPlanId: string;
+  stepIndex: number;
+  step: TestStep;
+  isCleanup: boolean;
+  rationale: string | null;
+}
+
+export interface BrowserTestRun {
+  id: string;
+  jobId: string;
+  viewport: 'desktop' | 'mobile';
+  startedAt: Date;
+  finishedAt: Date | null;
+  durationMs: number | null;
+  status: 'passed' | 'partial' | 'failed' | 'error';
+  browserVersion: string | null;
+  tracePath: string | null;
+  consoleErrorCount: number;
+  networkFailureCount: number;
+  a11yViolationCount: number;
+  a11ySummary: Record<string, unknown>;
+  cleanupStatus: 'complete' | 'partial' | 'not_attempted' | 'failed';
+  timedOut: boolean;
+}
+
+export interface BrowserTestStep {
+  id: string;
+  runId: string;
+  stepIndex: number;
+  action: string;
+  status: 'passed' | 'failed' | 'skipped' | 'error';
+  durationMs: number;
+  screenshotPath: string | null;
+  assertionDetail: Record<string, unknown>;
+  errorMessage: string | null;
+}
+
+export type EvidenceStance = 'supporting' | 'contradictory' | 'missing';
+
+export interface AssessmentEvidence {
+  id: string;
+  jobId: string;
+  categoryKey: RubricCategoryKey;
+  evidenceType: EvidenceSource;
+  stance: EvidenceStance;
+  summary: string;
+  sourceRef: Record<string, unknown>;
+  confidence: number;
+  createdAt: Date;
+}
+
+export interface CategoryScore {
+  id: string;
+  jobId: string;
+  categoryKey: RubricCategoryKey;
+  rawScore: number;
+  maxPoints: number;
+  weightedScore: number;
+  confidence: number;
+  rationale: string;
+  supportingEvidence: string[];
+  contradictoryEvidence: string[];
+  missingEvidence: string[];
+  isOverridden: boolean;
+  overrideReason: string | null;
+  overriddenBy: string | null;
+  overriddenAt: Date | null;
+  /** The model's original score, preserved across an override (ADR-012). */
+  originalRawScore: number | null;
+  modelVersion: string;
+  promptVersion: string;
+  rubricVersion: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface AssessmentSummary {
+  id: string;
+  jobId: string;
+  totalScore: number;
+  meanConfidence: number;
+  minConfidence: number;
+  lowConfidence: boolean;
+  risks: string[];
+  strengths: string[];
+  weaknesses: string[];
+  internalNotes: string | null;
+  bugsFound: { description: string; severity: 'low' | 'medium' | 'high'; evidence: string }[];
+  modelVersion: string;
+  promptVersion: string;
+  completedAt: Date | null;
+}
+
+export interface ConsistencyReview {
+  id: string;
+  jobId: string;
+  triggerReason: ConsistencyTrigger[];
+  passNumber: number;
+  scoreDelta: number;
+  adjusted: boolean;
+  detail: Record<string, unknown>;
+  reviewedAt: Date;
+}
+
+export interface ManualReviewFlag {
+  id: string;
+  submissionId: string;
+  reasonCode: string;
+  detail: string;
+  raisedBy: Actor;
+  status: 'open' | 'resolved' | 'dismissed';
+  resolvedBy: string | null;
+  resolvedAt: Date | null;
+  resolutionNote: string | null;
+  createdAt: Date;
+}
+
+export interface Disqualification {
+  id: string;
+  submissionId: string;
+  reasonCode: DisqualificationReason;
+  reasonDetail: string;
+  evidence: Record<string, unknown>;
+  status: 'proposed' | 'confirmed' | 'reversed';
+  proposedBy: Actor;
+  confirmedBy: string | null;
+  reversedBy: string | null;
+  reversedReason: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+// --------------------------------------------------------------------------
+// Ranking and selection
+// --------------------------------------------------------------------------
+
+export interface RankingSnapshot {
+  id: string;
+  cohortId: string;
+  generatedAt: Date;
+  rubricVersion: string;
+  eligibleCount: number;
+  shortlistTarget: number;
+  isCurrent: boolean;
+  notes: string | null;
+}
+
+export interface RankingEntry {
+  id: string;
+  snapshotId: string;
+  submissionId: string;
+  rank: number;
+  totalScore: number;
+  tiebreakVector: Record<string, number>;
+  inShortlist: boolean;
+  meanConfidence: number;
+}
+
+export interface FinalSelection {
+  id: string;
+  cohortId: string;
+  submissionId: string;
+  position: number;
+  selectedBy: string;
+  selectionReason: string;
+  selectedAt: Date;
+}
+
+export interface FeedbackReport {
+  id: string;
+  submissionId: string;
+  productSummary: string;
+  strengths: string[];
+  improvements: { title: string; detail: string; priority: number }[];
+  bugs: { description: string; evidence: string }[];
+  nextSevenDayPlan: string[];
+  /** Always false in Version 1. No route reads this. */
+  isExposedToParticipant: boolean;
+  generatedAt: Date;
+  modelVersion: string;
+  promptVersion: string;
+}
+
+// --------------------------------------------------------------------------
+// Global
+// --------------------------------------------------------------------------
+
+export interface ResourceDocument {
+  id: string;
+  cohortId: string | null;
+  kind: 'pitch_template' | 'instructions' | 'playbook' | 'other';
+  title: string;
+  description: string;
+  storageBucket: string;
+  storagePath: string;
+  mimeType: string;
+  byteSize: number;
+  isParticipantVisible: boolean;
+  displayOrder: number;
+  createdAt: Date;
+}
+
+export interface AuditLog {
+  id: string;
+  actorType: Actor;
+  actorRef: string | null;
+  action: string;
+  entityType: string;
+  entityId: string | null;
+  cohortId: string | null;
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
+  ipHash: string | null;
+  userAgentHash: string | null;
+  createdAt: Date;
+}
+
+export interface SystemSetting {
+  key: string;
+  value: unknown;
+  description: string;
+  updatedBy: string | null;
+  updatedAt: Date;
+}
+
+// --------------------------------------------------------------------------
+// Composite read models
+// --------------------------------------------------------------------------
+
+/** Everything a participant may see. Contains no assessment data by construction. */
+export interface ParticipantView {
+  cohort: Pick<
+    Cohort,
+    'id' | 'name' | 'code' | 'description' | 'timezone' | 'day12StartAt' | 'day13DeadlineAt' | 'submissionInstructions' | 'status'
+  >;
+  team: Pick<Team, 'id' | 'groupNumber' | 'leadName' | 'leadEmail' | 'leadPhone'>;
+  members: TeamMember[];
+  submission: Submission;
+  artifacts: SubmissionArtifact[];
+  declarations: SubmissionDeclarations | null;
+  ideas: CohortIdea[];
+  /** True when credentials are stored — never the values themselves. */
+  hasStoredCredentials: boolean;
+  canEdit: boolean;
+}
+
+/** The admin view of one submission. */
+export interface AdminSubmissionDetail {
+  submission: Submission;
+  team: Team;
+  members: TeamMember[];
+  cohort: Cohort;
+  idea: CohortIdea | null;
+  artifacts: SubmissionArtifact[];
+  declarations: SubmissionDeclarations | null;
+  credentials: SubmissionCredentials | null;
+  events: SubmissionEvent[];
+  job: AssessmentJob | null;
+  preflight: PreflightCheck[];
+  artifactAnalysis: ArtifactAnalysis | null;
+  testPlan: (TestPlan & { steps: TestPlanStep[] }) | null;
+  browserRuns: (BrowserTestRun & { steps: BrowserTestStep[] })[];
+  evidence: AssessmentEvidence[];
+  scores: CategoryScore[];
+  summary: AssessmentSummary | null;
+  consistencyReviews: ConsistencyReview[];
+  manualReviewFlags: ManualReviewFlag[];
+  disqualifications: Disqualification[];
+  feedbackReport: FeedbackReport | null;
+  auditLogs: AuditLog[];
+  rank: number | null;
+  inShortlist: boolean;
+}

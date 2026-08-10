@@ -1,0 +1,20 @@
+{
+  "name": "@ohj/worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "dev": "tsx watch src/index.ts",
+    "fixture-app": "tsx src/testing/fixture-app/server.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@axe-core/playwright": "^4.10.1",
+    "@ohj/ai": "*",
+    "@ohj/shared": "*",
+    "pdfjs-dist": "^4.2.67",
+    "playwright": "^1.49.0",
+    "zod": "^3.23.8"
+  }
+}
