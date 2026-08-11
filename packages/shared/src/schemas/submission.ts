@@ -22,21 +22,41 @@ import { validateProductUrl, validateDemoVideoUrl } from '../security/url';
 
 const trimmed = (schema: z.ZodString) => z.string().trim().pipe(schema);
 
+/**
+ * Text helpers.
+ *
+ * `required_error` and `invalid_type_error` matter as much as the length rules:
+ * a MISSING field reports the type error, not the min-length one, and Zod's
+ * default for that is the bare word "Required" — which told a participant
+ * nothing on the review screen.
+ */
 const shortText = (max: number, label: string) =>
-  trimmed(
-    z
-      .string()
-      .min(1, `${label} is required.`)
-      .max(max, `${label} must be ${max} characters or fewer.`),
-  );
+  z
+    .string({
+      required_error: `${label} is required.`,
+      invalid_type_error: `${label} is required.`,
+    })
+    .trim()
+    .pipe(
+      z
+        .string()
+        .min(1, `${label} is required.`)
+        .max(max, `${label} must be ${max} characters or fewer.`),
+    );
 
 const longText = (min: number, max: number, label: string) =>
-  trimmed(
-    z
-      .string()
-      .min(min, `${label} needs at least ${min} characters — enough to be specific.`)
-      .max(max, `${label} must be ${max} characters or fewer.`),
-  );
+  z
+    .string({
+      required_error: `${label} is required.`,
+      invalid_type_error: `${label} is required.`,
+    })
+    .trim()
+    .pipe(
+      z
+        .string()
+        .min(min, `${label} needs at least ${min} characters — enough to be specific.`)
+        .max(max, `${label} must be ${max} characters or fewer.`),
+    );
 
 /** Group number: integer 1–999, unique per cohort (ADR-022). */
 export const groupNumberSchema = z.coerce
@@ -280,8 +300,8 @@ export function looksLikePdf(head: Uint8Array): boolean {
 // --------------------------------------------------------------------------
 
 export const bugFixedSchema = z.object({
-  description: longText(15, 400, 'Bug description'),
-  howFixed: longText(10, 400, 'How it was fixed'),
+  description: longText(15, 400, 'A bug description'),
+  howFixed: longText(10, 400, 'A description of how the bug was fixed'),
 });
 
 export const learningStepSchema = z.object({
@@ -386,11 +406,26 @@ export type SubmissionStepKey = (typeof SUBMISSION_STEPS)[number];
 
 export const SUBMISSION_STEP_LABELS: Record<SubmissionStepKey, string> = {
   team: 'Team',
-  product: 'Product',
+  product: 'Product idea',
   live: 'Live product',
-  artifacts: 'Artifacts',
+  artifacts: 'Demo and deck',
   learning: 'Learning evidence',
   declarations: 'Declarations',
+};
+
+/**
+ * One line explaining what each step is for, shown at the top of the step.
+ *
+ * Written for a participant under time pressure: what to do, not what the field
+ * is called.
+ */
+export const SUBMISSION_STEP_INTROS: Record<SubmissionStepKey, string> = {
+  team: 'Confirm the people who actively built this submission.',
+  product: 'Select the approved challenge and describe the problem and product promise.',
+  live: 'Tell the automated judge how to safely access and test your core workflow.',
+  artifacts: 'Upload the final pitch deck and link the short product walkthrough.',
+  learning: 'Show how your team scoped, tested and improved the product during the hackathon.',
+  declarations: 'Confirm the rules your submission is entered under.',
 };
 
 export const fullSubmissionSchema = z.object({

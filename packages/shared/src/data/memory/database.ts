@@ -52,7 +52,7 @@ import {
   DEMO_ASSESSMENT_CONFIG,
   DEMO_BROWSER_RUNS,
   DEMO_COHORT,
-  DEMO_DEADLINE,
+  hoursAgo,
   DEMO_FEEDBACK,
   DEMO_MODEL_VERSION,
   DEMO_NOW,
@@ -190,36 +190,134 @@ export function seedDemoDatabase(db: MemoryDatabase): void {
     });
   });
 
-  // Participant resources
+  // Resource library — what an operator and a participant actually need.
+  const resource = (
+    key: string,
+    kind: ResourceDocument['kind'],
+    title: string,
+    description: string,
+    storagePath: string,
+    mimeType: string,
+    byteSize: number,
+    isParticipantVisible: boolean,
+    displayOrder: number,
+  ): ResourceDocument => ({
+    id: id(`resource-${key}`),
+    cohortId: cohort.id,
+    kind,
+    title,
+    description,
+    storageBucket: 'admin-resources',
+    storagePath,
+    mimeType,
+    byteSize,
+    isParticipantVisible,
+    displayOrder,
+    createdAt: DEMO_COHORT.createdAt,
+  });
+
   db.resources.push(
-    {
-      id: id('resource-pitch-template'),
-      cohortId: cohort.id,
-      kind: 'pitch_template',
-      title: 'Pitch Deck Template',
-      description: 'The official template to build your pitch deck from. Export as PDF before submitting.',
-      storageBucket: 'admin-resources',
-      storagePath: 'templates/pitch-deck-template.pptx',
-      mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-      byteSize: 8_343_316,
-      isParticipantVisible: true,
-      displayOrder: 1,
-      createdAt: DEMO_COHORT.createdAt,
-    },
-    {
-      id: id('resource-instructions'),
-      cohortId: cohort.id,
-      kind: 'instructions',
-      title: 'Submission Instructions',
-      description: 'What to prepare before you submit, and what happens after the deadline.',
-      storageBucket: 'admin-resources',
-      storagePath: 'docs/submission-instructions.pdf',
-      mimeType: 'application/pdf',
-      byteSize: 128_400,
-      isParticipantVisible: true,
-      displayOrder: 2,
-      createdAt: DEMO_COHORT.createdAt,
-    },
+    // Participant-visible.
+    resource(
+      'pitch-template',
+      'pitch_template',
+      'Official pitch-deck template',
+      'The template to build your pitch deck from. Export as PDF before submitting.',
+      'templates/pitch-deck-template.pptx',
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      8_343_316,
+      true,
+      1,
+    ),
+    resource(
+      'instructions',
+      'instructions',
+      'Submission instructions',
+      'What to prepare before you submit, and what happens after the deadline.',
+      'docs/submission-instructions.pdf',
+      'application/pdf',
+      128_400,
+      true,
+      2,
+    ),
+    resource(
+      'idea-guide',
+      'other',
+      'Approved product-idea guide',
+      'The eight approved challenges, with the minimum core flow expected for each.',
+      'docs/approved-ideas.pdf',
+      'application/pdf',
+      96_200,
+      true,
+      3,
+    ),
+    resource(
+      'workbook',
+      'playbook',
+      'Product-building workbook',
+      'The ideation, build and demo workbook used through the accelerator.',
+      'docs/product-building-workbook.pdf',
+      'application/pdf',
+      706_532,
+      true,
+      4,
+    ),
+    // Internal.
+    resource(
+      'admin-playbook',
+      'playbook',
+      'Admin operating playbook',
+      'How to run a cohort end to end, including the Day 13 to Day 14 checklist.',
+      'docs/ADMIN_PLAYBOOK.md',
+      'text/markdown',
+      21_400,
+      false,
+      5,
+    ),
+    resource(
+      'internal-deck',
+      'other',
+      'Internal product demo deck',
+      'Eleven-slide briefing on what the platform does and how judging works.',
+      'docs/deck/internal-briefing.html',
+      'text/html',
+      11_553,
+      false,
+      6,
+    ),
+    resource(
+      'deployment-runbook',
+      'other',
+      'Deployment runbook',
+      'What a production deployment involves, including the worker egress policy.',
+      'docs/DEPLOYMENT_RUNBOOK.md',
+      'text/markdown',
+      9_800,
+      false,
+      7,
+    ),
+    resource(
+      'night-checklist',
+      'other',
+      'Day 13 to Day 14 checklist',
+      'The ten-hour run from deadline to private shortlist, hour by hour.',
+      'docs/ADMIN_PLAYBOOK.md',
+      'text/markdown',
+      21_400,
+      false,
+      8,
+    ),
+    resource(
+      'rubric-guide',
+      'other',
+      'Scoring-rubric guide',
+      'The eight categories, their weights, and what evidence supports each.',
+      'docs/PRD.md',
+      'text/markdown',
+      14_200,
+      false,
+      9,
+    ),
   );
 
   // Teams, submissions, and everything downstream
@@ -269,7 +367,7 @@ export function seedDemoDatabase(db: MemoryDatabase): void {
     db.demoInviteTokens.set(teamId, invite.token);
 
     const isIncomplete = seed.scenario === 'incomplete';
-    const submittedAt = isIncomplete ? null : new Date(DEMO_DEADLINE.getTime() - 3_600_000);
+    const submittedAt = isIncomplete ? null : hoursAgo(5);
 
     db.submissions.push(
       buildSubmission({
@@ -361,7 +459,7 @@ export function seedDemoDatabase(db: MemoryDatabase): void {
       eventType: 'draft_created',
       actorType: 'participant',
       detail: {},
-      createdAt: new Date(DEMO_DEADLINE.getTime() - 86_400_000),
+      createdAt: hoursAgo(30),
     });
     if (!isIncomplete) {
       db.events.push({
@@ -453,7 +551,7 @@ function buildSubmission(input: {
           product: { productName: input.productName, ideaId: input.ideaId },
         }
       : {},
-    draftUpdatedAt: incomplete ? new Date(DEMO_DEADLINE.getTime() - 7_200_000) : input.submittedAt,
+    draftUpdatedAt: incomplete ? hoursAgo(2) : input.submittedAt,
     submittedAt: input.submittedAt,
     receiptId: incomplete ? null : demoReceiptId(input.groupNumber),
     lockedAt: input.submittedAt,
@@ -462,7 +560,7 @@ function buildSubmission(input: {
     isLate: false,
     hasLateException: false,
 
-    createdAt: new Date(DEMO_DEADLINE.getTime() - 86_400_000),
+    createdAt: hoursAgo(30),
     updatedAt: input.submittedAt ?? DEMO_NOW,
   };
 }
@@ -600,11 +698,11 @@ function seedAssessment(
     claimedAt: null,
     leaseExpiresAt: null,
     heartbeatAt: null,
-    startedAt: new Date(DEMO_DEADLINE.getTime() + 600_000),
-    completedAt: stage === 'completed' ? new Date(DEMO_DEADLINE.getTime() + 2_400_000) : null,
+    startedAt: hoursAgo(4),
+    completedAt: stage === 'completed' ? hoursAgo(3) : null,
     lastError: input.scenario === 'inaccessible' ? 'DNS lookup failed: NXDOMAIN (attempt 3 of 3).' : null,
     nextAttemptAt: null,
-    createdAt: new Date(DEMO_DEADLINE.getTime() + 300_000),
+    createdAt: hoursAgo(4.5),
     updatedAt: DEMO_NOW,
   });
 
@@ -618,7 +716,7 @@ function seedAssessment(
       attemptNumber: check.attemptNumber,
       failureClass: check.failureClass,
       detail: { message: check.detail },
-      checkedAt: new Date(DEMO_DEADLINE.getTime() + 660_000 + index * 1000),
+      checkedAt: new Date(hoursAgo(4).getTime() + index * 1000),
     });
   });
 
@@ -657,7 +755,7 @@ function seedAssessment(
         : [],
     modelVersion: DEMO_MODEL_VERSION,
     promptVersion: DEMO_PROMPT_VERSION,
-    createdAt: new Date(DEMO_DEADLINE.getTime() + 720_000),
+    createdAt: hoursAgo(3.9),
   });
 
   // Manual review flags
@@ -673,7 +771,7 @@ function seedAssessment(
       resolvedBy: null,
       resolvedAt: null,
       resolutionNote: null,
-      createdAt: new Date(DEMO_DEADLINE.getTime() + 700_000),
+      createdAt: hoursAgo(3.9),
     });
   }
   if (input.scenario === 'low_confidence') {
@@ -688,7 +786,7 @@ function seedAssessment(
       resolvedBy: null,
       resolvedAt: null,
       resolutionNote: null,
-      createdAt: new Date(DEMO_DEADLINE.getTime() + 2_300_000),
+      createdAt: hoursAgo(3.1),
     });
   }
 
@@ -711,8 +809,8 @@ function seedAssessment(
       confirmedBy: null,
       reversedBy: null,
       reversedReason: null,
-      createdAt: new Date(DEMO_DEADLINE.getTime() + 4_200_000),
-      updatedAt: new Date(DEMO_DEADLINE.getTime() + 4_200_000),
+      createdAt: hoursAgo(2.5),
+      updatedAt: hoursAgo(2.5),
     });
   }
 
@@ -724,8 +822,8 @@ function seedAssessment(
       id: runId,
       jobId,
       viewport: run.viewport,
-      startedAt: new Date(DEMO_DEADLINE.getTime() + 900_000),
-      finishedAt: new Date(DEMO_DEADLINE.getTime() + 900_000 + run.durationMs),
+      startedAt: hoursAgo(3.8),
+      finishedAt: new Date(hoursAgo(3.8).getTime() + run.durationMs),
       durationMs: run.durationMs,
       status: run.status,
       browserVersion: 'Chromium 131.0 (demo fixture)',
@@ -759,7 +857,7 @@ function seedAssessment(
   if (!SCENARIOS_WITH_SCORES.includes(input.scenario)) return;
 
   const scores = buildDemoScores(input.scenario);
-  const now = new Date(DEMO_DEADLINE.getTime() + 2_400_000);
+  const now = hoursAgo(3);
 
   scores.forEach((score) => {
     db.scores.push({
@@ -885,7 +983,7 @@ function seedAssessment(
         note: 'Second pass agreed within 0.5 points. No adjustment applied.',
         categoriesReviewed: RUBRIC_CATEGORIES.map((c) => c.key),
       },
-      reviewedAt: new Date(DEMO_DEADLINE.getTime() + 3_000_000),
+      reviewedAt: hoursAgo(2.8),
     });
   }
 }
@@ -948,7 +1046,7 @@ function seedRanking(db: MemoryDatabase, cohort: Cohort): void {
   db.rankingSnapshots.push({
     id: snapshotId,
     cohortId: cohort.id,
-    generatedAt: new Date(DEMO_DEADLINE.getTime() + 5_400_000),
+    generatedAt: hoursAgo(2),
     rubricVersion: RUBRIC_VERSION,
     eligibleCount: ordered.length,
     shortlistTarget: cohort.shortlistTarget,

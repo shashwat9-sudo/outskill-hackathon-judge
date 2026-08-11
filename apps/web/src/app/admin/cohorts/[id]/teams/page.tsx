@@ -1,5 +1,5 @@
 import { notFound } from 'next/navigation';
-import { getEnvConfig, getMemoryStore, getStore } from '@/lib/store';
+import { getDemoStore, getEnvConfig, getStore } from '@/lib/store';
 import { requireAdmin } from '@/server/admin-auth';
 import {
   exportInvitesAction,
@@ -16,7 +16,7 @@ export default async function TeamsPage({ params }: { params: Promise<{ id: stri
   const { id } = await params;
   const session = await requireAdmin();
   const store = getStore();
-  const memory = getMemoryStore();
+  const demo = getDemoStore();
   const env = getEnvConfig();
 
   const cohort = await store.cohorts.getCohort(id);
@@ -91,7 +91,7 @@ export default async function TeamsPage({ params }: { params: Promise<{ id: stri
             </thead>
             <tbody>
               {teams.map((team) => {
-                const token = memory?.getDemoInviteToken(team.id) ?? null;
+                const token = demo?.getDemoInviteToken(team.id) ?? null;
                 const revoked = team.invite?.revokedAt;
                 return (
                   <tr key={team.id}>

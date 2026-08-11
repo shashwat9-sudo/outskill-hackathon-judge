@@ -1,35 +1,83 @@
 @import 'tailwindcss';
 
-/**
- * Design tokens.
- *
- * Black, white and Outskill green. The green is a documented placeholder —
- * no Outskill green exists in any supplied asset (ADR-014). Contrast pairs are
- * chosen for WCAG AA: --brand on white is 4.53:1, --brand-bright on black is
- * 9.94:1.
- */
-@theme {
-  --color-brand: #0b8a45;
-  --color-brand-bright: #00c853;
-  --color-brand-deep: #064e2b;
-  --color-brand-tint: #e8f8ee;
+/* ==========================================================================
+   Outskill design tokens
+   --------------------------------------------------------------------------
+   ONE PLACE. Every colour in the product resolves through these variables, so
+   replacing the temporary lime with the official Outskill green is a change to
+   `--brand-accent` and `--brand-accent-hover` below and nothing else.
 
-  --color-ink: #000000;
-  --color-ink-soft: #111111;
-  --color-muted: #6b6b6b;
-  --color-line: #d4d4d4;
-  --color-surface: #ffffff;
-  --color-surface-alt: #f7f7f7;
+   The exact brand green has NOT been confirmed. These are documented
+   placeholders, not declared brand values. See docs/BRANDING.md.
+   ========================================================================== */
 
-  --color-danger: #b3261e;
-  --color-danger-tint: #fdecea;
-  --color-warning: #8a5a00;
-  --color-warning-tint: #fff6e5;
-  --color-info: #1b5e9e;
-  --color-info-tint: #eaf2fa;
+:root {
+  /* --- Placeholder brand palette (swap these two for the official green) --- */
+  --brand-accent: #c8ff38;
+  --brand-accent-hover: #b7ee2f;
+
+  /* --- Surfaces: near-black page, charcoal and dark-green raised planes --- */
+  --brand-background: #060806;
+  --brand-surface: #10140e;
+  --brand-surface-raised: #161c13;
+  --brand-surface-soft: #1d2419;
+
+  /* --- Text --- */
+  --brand-text: #f4f7f1;
+  --brand-text-muted: #9fa89a;
+
+  /* --- Lines and status --- */
+  --brand-border: #2a3326;
+  --brand-danger: #ff6262;
+  --brand-warning: #f3bd52;
+  --brand-success: #77dd77;
+
+  /* Derived: accent at low opacity, for tints and glows. */
+  --brand-accent-tint: color-mix(in srgb, var(--brand-accent) 14%, transparent);
+  --brand-accent-edge: color-mix(in srgb, var(--brand-accent) 38%, transparent);
+  --brand-danger-tint: color-mix(in srgb, var(--brand-danger) 14%, transparent);
+  --brand-warning-tint: color-mix(in srgb, var(--brand-warning) 14%, transparent);
+  --brand-success-tint: color-mix(in srgb, var(--brand-success) 14%, transparent);
+
+  /* Blue is reserved for links and technical information only — never for a
+     primary action, and never as a default UI state. */
+  --brand-link: #7fc4ff;
+  --brand-link-tint: color-mix(in srgb, var(--brand-link) 12%, transparent);
+}
+
+/* Tailwind utility mapping. Semantic names, so markup reads by role rather
+   than by colour: bg-surface, text-muted, border-line, bg-brand. */
+@theme inline {
+  --color-canvas: var(--brand-background);
+  --color-surface: var(--brand-surface);
+  --color-surface-alt: var(--brand-surface-raised);
+  --color-surface-soft: var(--brand-surface-soft);
+
+  --color-ink: var(--brand-text);
+  --color-ink-soft: var(--brand-text);
+  --color-muted: var(--brand-text-muted);
+
+  --color-line: var(--brand-border);
+  --color-brand: var(--brand-accent);
+  --color-brand-hover: var(--brand-accent-hover);
+  --color-brand-tint: var(--brand-accent-tint);
+  --color-brand-edge: var(--brand-accent-edge);
+
+  --color-danger: var(--brand-danger);
+  --color-danger-tint: var(--brand-danger-tint);
+  --color-warning: var(--brand-warning);
+  --color-warning-tint: var(--brand-warning-tint);
+  --color-success: var(--brand-success);
+  --color-success-tint: var(--brand-success-tint);
+  --color-info: var(--brand-link);
+  --color-info-tint: var(--brand-link-tint);
 
   --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
+
+  /* 8px spacing scale and a consistent radius scale. */
+  --radius-card: 14px;
+  --radius-control: 10px;
 }
 
 * {
@@ -38,38 +86,109 @@
 
 html {
   -webkit-text-size-adjust: 100%;
+  color-scheme: dark;
+  background: var(--brand-background);
 }
 
 body {
   margin: 0;
-  background: var(--color-surface);
-  color: var(--color-ink);
+  background: var(--brand-background);
+  color: var(--brand-text);
   font-family: var(--font-sans);
   font-size: 16px;
   line-height: 1.55;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
-/* A single visible focus treatment everywhere — never removed, only restyled. */
-:where(a, button, input, select, textarea, [tabindex]):focus-visible {
-  outline: 3px solid var(--color-brand);
+h1,
+h2,
+h3,
+h4 {
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+}
+
+/* One visible focus treatment, everywhere. Never removed — only restyled. */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--brand-accent);
   outline-offset: 2px;
-  border-radius: 2px;
+  border-radius: 4px;
 }
 
-/* Skip link: present for keyboard users, out of the way for everyone else. */
+::selection {
+  background: var(--brand-accent);
+  color: #000;
+}
+
+/* Keyboard users get to the content without tabbing the whole nav. */
 .skip-link {
   position: absolute;
   left: -9999px;
   top: 0;
   z-index: 100;
-  background: var(--color-ink);
-  color: var(--color-surface);
+  background: var(--brand-accent);
+  color: #000;
   padding: 0.75rem 1rem;
-  font-weight: 600;
+  font-weight: 700;
 }
 .skip-link:focus {
   left: 0;
+}
+
+/* Restrained glow, used only on the primary action and active nav. */
+.glow-accent {
+  box-shadow: 0 0 0 1px var(--brand-accent-edge), 0 8px 24px -12px var(--brand-accent);
+}
+
+/* Dark scrollbars, so the chrome does not fight the theme. */
+* {
+  scrollbar-color: var(--brand-border) transparent;
+  scrollbar-width: thin;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--brand-border);
+  border-radius: 6px;
+}
+
+/* Native controls that would otherwise render light. */
+input[type='file'] {
+  color: var(--brand-text-muted);
+}
+input[type='file']::file-selector-button {
+  background: var(--brand-surface-soft);
+  color: var(--brand-text);
+  border: 1px solid var(--brand-border);
+  border-radius: 8px;
+  padding: 0.4rem 0.8rem;
+  margin-right: 0.75rem;
+  font: inherit;
+  cursor: pointer;
+}
+input[type='date'],
+input[type='datetime-local'],
+input[type='time'] {
+  color-scheme: dark;
+}
+
+/* Skeletons for loading states. */
+@keyframes ohj-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+.skeleton {
+  background: var(--brand-surface-soft);
+  border-radius: 8px;
+  animation: ohj-pulse 1.6s ease-in-out infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -83,7 +202,6 @@ body {
   }
 }
 
-/* Print: judging material should not be casually printed. */
 @media print {
   .no-print {
     display: none !important;

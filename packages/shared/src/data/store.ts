@@ -316,6 +316,12 @@ export interface SettingsStore {
 // Composite
 // --------------------------------------------------------------------------
 
+export interface DemoInvite {
+  teamId: string;
+  groupNumber: number;
+  token: string;
+}
+
 export interface DataStore {
   readonly driver: 'memory' | 'postgres';
   participant: ParticipantStore;
@@ -330,4 +336,29 @@ export interface DataStore {
   settings: SettingsStore;
   /** Demo mode only — resets to the deterministic fixture state. */
   reset?(): Promise<void>;
+
+  /**
+   * Demo-mode capabilities, declared on the interface rather than discovered
+   * with `instanceof`.
+   *
+   * The store instance is cached across module reloads, so a class-identity
+   * check compares against a stale constructor and silently fails — which is
+   * exactly how the demo invite links disappeared. Callers must feature-detect
+   * these methods instead.
+   */
+  getDemoInviteToken?(teamId: string): string | null;
+  listDemoInvites?(): DemoInvite[];
+}
+
+/**
+ * Feature-detect the demo capability. Survives module reloading because it
+ * asks what the object can do, not what class it came from.
+ */
+export function asDemoStore(
+  store: DataStore,
+): (DataStore & Required<Pick<DataStore, 'getDemoInviteToken' | 'listDemoInvites'>>) | null {
+  if (store.driver !== 'memory') return null;
+  if (typeof store.getDemoInviteToken !== 'function') return null;
+  if (typeof store.listDemoInvites !== 'function') return null;
+  return store as DataStore & Required<Pick<DataStore, 'getDemoInviteToken' | 'listDemoInvites'>>;
 }

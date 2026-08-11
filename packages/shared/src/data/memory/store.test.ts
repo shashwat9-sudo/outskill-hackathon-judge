@@ -102,10 +102,21 @@ describe('draft and final submit', () => {
   });
 
   it('refuses to edit when the cohort is not open', async () => {
-    // The demo cohort is in "judging"; even a draft cannot be edited.
+    // The demo cohort ships open so the learner journey is explorable; close it
+    // to assert the rule. Even a draft cannot be edited once the cohort closes.
+    await store.cohorts.setCohortStatus(DEMO_COHORT_ID, 'closed');
     await expect(
       store.participant.saveDraft(demoSubmissionId(27), { product: { productName: 'Renamed' } }),
     ).rejects.toThrow(/not currently accepting/i);
+  });
+
+  it('lets a draft be edited while the cohort is open', async () => {
+    // The demo cohort ships open, so previewing the learner journey works
+    // immediately without an operator changing anything first.
+    const submission = await store.participant.saveDraft(demoSubmissionId(27), {
+      product: { productName: 'Renamed in demo' },
+    });
+    expect(submission.productName).toBe('Renamed in demo');
   });
 
   it('autosaves and promotes known draft fields into typed columns', async () => {

@@ -2,7 +2,10 @@
 
 ## Current position
 
-**All seven phases complete.** The platform runs end to end locally in demo mode. Nothing has been deployed.
+**All seven phases complete, plus a UX, information-architecture and branding pass.**
+The platform runs end to end locally in demo mode. Nothing has been deployed.
+
+**Gate:** lint ✅ · typecheck ✅ · 244 unit/integration tests ✅ · 67 E2E tests ✅ · build ✅
 
 | Phase | State |
 | --- | --- |
@@ -14,7 +17,94 @@
 | 5 — Scoring and ranking | ✅ complete |
 | 6 — Hardening | ✅ complete |
 
-**Gate:** lint ✅ · typecheck ✅ · 229 unit/integration tests ✅ · 26 E2E tests ✅ · build ✅
+---
+
+## UX, IA and branding pass
+
+A focused redesign on top of the working platform. No change to the assessment
+logic, scoring, ranking, final-four selection, schema, routes, demo-mode
+behaviour or security controls.
+
+### The rendering defect, and its root cause
+
+The demo home page showed the "Seeded invite links" table headings with **no
+rows**. Reproduced in dev mode: the rows rendered on first load and vanished
+after any hot reload.
+
+The store is cached on `globalThis` so fixture state survives module reloading,
+but the demo-only accessor tested `store instanceof MemoryDataStore`. After a
+reload the class object differs from the one the cached instance was built with,
+so the check returned false, `getMemoryStore()` returned null, and the invite
+array was empty — headings with zero rows, in a build that otherwise passed.
+
+Fixed by declaring the demo capability on the `DataStore` interface and
+feature-detecting it (`asDemoStore`), which cannot fail across a module
+boundary. Two other call sites had the same bug. Regression tests cover both the
+capability check and that all six invite tokens resolve to their own team.
+
+### Demo dates
+
+Fixed past dates made every demo open with an expired deadline. Dates are now
+derived from a session clock captured once at module load: Day 12 opened this
+morning, the deadline is tomorrow at 11:59 PM IST, the shortlist is due the day
+after at 10:00 AM. Frozen for the process, so a dev session and a test run stay
+stable. Assessment fixtures were rebased onto the same clock so recorded events
+sit in the past. The demo cohort now ships **open**, so the learner journey is
+explorable without an operator changing anything first.
+
+### What was redesigned
+
+| Surface | Change |
+| --- | --- |
+| Visual system | Near-black canvas, charcoal and dark-green surfaces, off-white text, grey-green supporting text, one bright lime accent. All colour flows through `--brand-*` tokens in one file. |
+| Production root | Participant-facing landing page. No demo credentials, no synthetic links, no admin detail. Admin entry is a restrained link. |
+| Demo root | Marked internal, two primary entry cards, and six scenario cards rendered from the real fixture source. |
+| Learner journey | Branded shell, dual-timezone deadline, six-step progress, per-step explanations, idea selection as cards, sticky action bar, save status, grouped missing fields, dedicated receipt page. |
+| Admin IA | Sidebar with cohort context; Judging, Shortlist and Finalists replace Queue, Ranking and Final four. |
+| Admin Overview | Run-this-cohort checklist with per-step state, metric cards, an attention list of only actionable issues, and stage-appropriate quick actions. |
+| Cohorts | Cards plus a guided three-step creation drawer. Lifecycle controls state their effect before changing status. |
+| Judging | Visual pipeline, needs-attention before consumption detail, and an explicit note that the average duration covers the whole pipeline while the 8-minute limit applies only to browser testing. |
+| Shortlist | Labelled private, top entries with category breakdown and evidence links, full ranking secondary, no winner language. |
+| Finalists | Four numbered slots, none pre-filled, each requiring a recorded reason. |
+| Resources | Download cards grouped by audience. Storage internals moved to Settings → System diagnostics. |
+| Settings | Five areas; judging configuration in minutes and counts, raw keys under Advanced. |
+| Onboarding | Dismissible six-step panel on first demo sign-in, remembered locally. |
+
+### Defects found during visual review
+
+Reviewing the captured screenshots surfaced five issues, all fixed:
+
+1. **Two steppers in the DOM** — one hidden per breakpoint, which meant two `nav` landmarks with the same label and a broken mobile selector. Replaced with one responsive stepper.
+2. **`Card` and `Disclosure` dropped `data-testid`** — arbitrary props were not spread, so test hooks never reached the DOM. Added explicit `testId` props.
+3. **"Required" validation messages** — a missing field reports Zod's type error, not the min-length one, so the review screen showed three bare "Required" lines. Added `required_error` messages throughout.
+4. **Sticky action bar could obscure the last field.** Added bottom clearance and reflowed the bar on small screens.
+5. **Duplicated completion percentage** and an "Export top 10" label that was wrong whenever the shortlist target was not 10.
+
+Playwright also empties `test-results/` before each run, which was deleting the
+review screenshots; its own artefacts now go to a subfolder.
+
+### Tests added
+
+| Area | Where |
+| --- | --- |
+| Demo dates are never expired; clock frozen per process | `packages/shared/src/fixtures/demo.test.ts` |
+| Demo capability survives module reloading; six tokens resolve | same |
+| Dark theme tokens applied; lime CTA with black text; no default Tailwind blue | `e2e/branding.spec.ts` |
+| Six scenario cards; every learner link opens a valid invite route | `e2e/demo-home.spec.ts` |
+| Six-step indicator, per-step explanations, idea cards, masked password, receipt | `e2e/participant.spec.ts` |
+| No admin navigation, no scores/rank/evidence on portal or receipt | same |
+| Operator navigation labels; checklist with states; attention list | `e2e/admin.spec.ts` |
+| Guided cohort creation; lifecycle effects explained | same |
+| Judging shows no milliseconds; usage detail collapsed | same |
+| Shortlist labelled private, no winner language | same |
+| Finalists require exactly four | same |
+| Resource cards by audience; storage detail not on the main page | same |
+| Settings in minutes; raw values retained under Advanced | same |
+
+### Screenshots
+
+`test-results/ux-review/` — thirteen surfaces at 1440×960 and 390×844, captured
+by `e2e/screenshots.spec.ts`.
 
 ---
 
@@ -42,6 +132,10 @@
 | 18 | Historical calibration does not depend on old websites | ✅ | Text-only calibration; no historical URL is ever fetched |
 | 19 | No PII or private source file is committed | ✅ | `git ls-files \| grep reference-materials` → 0 |
 | 20 | Lint, typecheck, tests and build pass | ✅ | `npm run verify` + `npm run test:e2e` |
+
+All twenty still hold after the redesign. Participant isolation, the security
+controls, the scoring and ranking logic, the schema and the assessment pipeline
+were not modified.
 
 ---
 

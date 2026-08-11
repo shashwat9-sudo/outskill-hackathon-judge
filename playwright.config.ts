@@ -9,6 +9,9 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   workers: 1,
   reporter: process.env.CI ? 'github' : [['list']],
+  // Playwright empties its output directory before every run. Point it at a
+  // subfolder so the UX review screenshots in test-results/ux-review survive.
+  outputDir: './test-results/.playwright',
   timeout: 60_000,
   expect: { timeout: 10_000 },
 

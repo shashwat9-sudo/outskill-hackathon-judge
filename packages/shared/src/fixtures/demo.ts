@@ -28,10 +28,45 @@ import { IDEA_SEEDS } from './ideas';
 const NS = 'ohj-demo';
 export const id = (name: string): string => deterministicId(NS, name);
 
-/** Fixed clock so every demo run produces identical timestamps. */
-export const DEMO_NOW = new Date('2026-03-14T04:30:00.000Z'); // 10:00 IST, Day 14
-export const DEMO_DAY12_START = new Date('2026-03-12T03:30:00.000Z'); // 09:00 IST Day 12
-export const DEMO_DEADLINE = new Date('2026-03-13T18:29:00.000Z'); // 23:59 IST Day 13
+/**
+ * Demo clock.
+ *
+ * Dates are relative to when the process started, so a demo never opens with an
+ * expired deadline — a fixed past date made every run look like a missed
+ * cohort. The instant is captured ONCE at module load and frozen for the life
+ * of the process, so timestamps stay stable across a dev session and within a
+ * single test run.
+ *
+ * Everything else in the fixtures remains deterministic: ids are derived from
+ * names, not from time.
+ */
+const SESSION_START = new Date();
+
+/** Midnight tonight, in the demo cohort's timezone, expressed in UTC. */
+function demoDayBoundary(daysFromToday: number, hour: number, minute: number): Date {
+  // IST is UTC+5:30 and does not observe daylight saving, so a fixed offset is
+  // exact here. A tz-aware calculation would be needed for other zones.
+  const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+  const istNow = new Date(SESSION_START.getTime() + IST_OFFSET_MS);
+  const istMidnight = Date.UTC(
+    istNow.getUTCFullYear(),
+    istNow.getUTCMonth(),
+    istNow.getUTCDate() + daysFromToday,
+    hour,
+    minute,
+    0,
+    0,
+  );
+  return new Date(istMidnight - IST_OFFSET_MS);
+}
+
+export const DEMO_NOW = SESSION_START;
+/** Day 12 opened this morning at 09:00 IST. */
+export const DEMO_DAY12_START = demoDayBoundary(0, 9, 0);
+/** Day 13 closes tomorrow at 11:59 PM IST — always in the future. */
+export const DEMO_DEADLINE = demoDayBoundary(1, 23, 59);
+/** Day 14 shortlist is due the day after, at 10:00 AM IST. */
+export const DEMO_SHORTLIST_DUE = demoDayBoundary(2, 10, 0);
 
 export const DEMO_COHORT_ID = id('cohort');
 export const DEMO_MODEL_VERSION = 'demo-fixture-model-1';
@@ -63,11 +98,17 @@ export const DEMO_COHORT = {
     'Build only from the approved product ideas below. Submit your live product URL, a PDF pitch deck using the supplied template, and a demo video of three minutes or less. Your submission locks when you press Final Submit — you can edit freely until then.',
   rubricVersion: RUBRIC_VERSION,
   assessmentConfig: DEMO_ASSESSMENT_CONFIG,
-  status: 'judging' as const,
+  // Open, so the learner journey is fully explorable in demo mode. Assessment
+  // fixtures are pre-seeded regardless of status so the admin side is populated.
+  status: 'open' as const,
   finalisedAt: null,
   createdAt: DEMO_DAY12_START,
   updatedAt: DEMO_NOW,
 };
+
+/** Assessment fixtures are stamped relative to now, so they read as already done. */
+export const hoursAgo = (hours: number): Date => new Date(DEMO_NOW.getTime() - hours * 3_600_000);
+export const minutesAgo = (minutes: number): Date => new Date(DEMO_NOW.getTime() - minutes * 60_000);
 
 // --------------------------------------------------------------------------
 // Teams
@@ -137,6 +178,54 @@ export const DEMO_TEAMS: readonly DemoTeamSeed[] = [
     memberRoles: ['Team Lead (Demo)', 'Builder One (Demo)', 'Builder Two (Demo)'],
   },
 ] as const;
+
+/**
+ * How each scenario is described to an operator exploring the demo.
+ *
+ * The point of the six teams is that an operator can recognise each situation
+ * on the night, so the labels describe the *situation*, not the fixture.
+ */
+export const DEMO_SCENARIO_META: Record<
+  DemoScenario,
+  { label: string; summary: string; tone: 'success' | 'neutral' | 'warning' | 'danger' | 'info' }
+> = {
+  complete: {
+    label: 'Complete final submission',
+    summary:
+      'Everything supplied and the product works. The core workflow ran end to end twice and data survived a reload.',
+    tone: 'success',
+  },
+  incomplete: {
+    label: 'Draft in progress',
+    summary:
+      'Started but never finally submitted. Use this one to walk through the six submission steps yourself.',
+    tone: 'neutral',
+  },
+  login_required: {
+    label: 'Login-required product',
+    summary:
+      'Needs an account, so the team supplied demo credentials. They are encrypted and masked, and never sent to an AI model.',
+    tone: 'info',
+  },
+  inaccessible: {
+    label: 'Inaccessible product',
+    summary:
+      'The product URL never resolved. Preflight retried three times and recorded every attempt before proposing anything.',
+    tone: 'danger',
+  },
+  manual_review: {
+    label: 'Manual-review case',
+    summary:
+      'A native mobile app, which automated browser testing cannot assess. Routed to a human rather than penalised.',
+    tone: 'warning',
+  },
+  low_confidence: {
+    label: 'Low-confidence assessment',
+    summary:
+      'Assessed, but the run hit its time budget and the deck could not be read. Scored provisionally and flagged.',
+    tone: 'warning',
+  },
+};
 
 export const demoTeamId = (groupNumber: number) => id(`team-${groupNumber}`);
 export const demoSubmissionId = (groupNumber: number) => id(`submission-${groupNumber}`);

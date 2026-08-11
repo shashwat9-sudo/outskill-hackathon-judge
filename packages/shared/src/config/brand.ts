@@ -1,59 +1,62 @@
 /**
- * Brand tokens.
+ * Brand tokens — the single source of truth.
  *
- * The supplied pitch-deck template uses the stock Google Slides theme
- * (accent `#4285F4`), so no Outskill green exists in any asset we were given.
- * The green below is a documented placeholder chosen for contrast, not a guess
- * at the real brand colour (ADR-014). Replacing it is a one-line change here
- * plus the `BRAND_GREEN` environment variable.
+ * The exact Outskill green has NOT been confirmed. `accent` and `accentHover`
+ * below are documented placeholders (ADR-014). Replacing them, plus the two
+ * matching CSS variables in `apps/web/src/app/globals.css`, changes the whole
+ * product — nothing else hard-codes a colour.
  *
- * Contrast, verified against WCAG 2.1 AA:
- *   green700 (#0B8A45) on white   → 4.53:1  (AA for normal text)
- *   green500 (#00C853) on black   → 9.94:1  (AAA)
- *   white on green700             → 4.53:1  (AA)
+ * See docs/BRANDING.md for the full token reference and the swap procedure.
  */
 
 export const BRAND = {
-  /** Primary accent. Use on dark surfaces and for non-text emphasis. */
-  green500: '#00C853',
-  /** Text-safe green on light surfaces. */
-  green700: '#0B8A45',
-  /** Deep green for large headings and dark-surface fills. */
-  green900: '#064E2B',
-  /** Tint for subtle backgrounds. */
-  green50: '#E8F8EE',
+  /** Placeholder accent — bright lime. Swap for the official green. */
+  accent: '#c8ff38',
+  accentHover: '#b7ee2f',
+
+  /** Near-black page, charcoal and dark-green raised planes. */
+  background: '#060806',
+  surface: '#10140e',
+  surfaceRaised: '#161c13',
+  surfaceSoft: '#1d2419',
+
+  text: '#f4f7f1',
+  textMuted: '#9fa89a',
+  border: '#2a3326',
+
+  danger: '#ff6262',
+  warning: '#f3bd52',
+  success: '#77dd77',
+
+  /** Reserved for links and technical information only. Never a primary action. */
+  link: '#7fc4ff',
 
   black: '#000000',
-  white: '#FFFFFF',
-
-  /** Neutrals — the deck palette is black, white and green, so greys stay cool. */
-  grey900: '#111111',
-  grey700: '#3A3A3A',
-  grey500: '#6B6B6B',
-  grey300: '#D4D4D4',
-  grey100: '#F2F2F2',
-
-  /** Status colours. Deliberately not green, so "pass" never reads as branding. */
-  danger: '#B3261E',
-  warning: '#8A5A00',
-  info: '#1B5E9E',
+  white: '#ffffff',
 } as const;
 
 export type BrandToken = keyof typeof BRAND;
 
-/** Allow the placeholder green to be overridden without a code change. */
-export function resolveBrandGreen(envValue: string | undefined): string {
-  if (!envValue) return BRAND.green500;
+/** Allow the placeholder accent to be overridden without a code change. */
+export function resolveBrandAccent(envValue: string | undefined): string {
+  if (!envValue) return BRAND.accent;
   const trimmed = envValue.trim();
-  return /^#[0-9a-fA-F]{6}$/.test(trimmed) ? trimmed : BRAND.green500;
+  return /^#[0-9a-fA-F]{6}$/.test(trimmed) ? trimmed : BRAND.accent;
 }
 
-/** Palette for the programmatically generated internal deck (Phase 6). */
+/** Palette for the programmatically generated internal deck. */
 export const DECK_PALETTE = {
-  background: BRAND.black,
-  surface: BRAND.grey900,
-  text: BRAND.white,
-  textMuted: BRAND.grey300,
-  accent: BRAND.green500,
-  accentDeep: BRAND.green900,
+  background: BRAND.background,
+  surface: BRAND.surface,
+  text: BRAND.text,
+  textMuted: BRAND.textMuted,
+  accent: BRAND.accent,
+  accentDeep: BRAND.surfaceSoft,
 } as const;
+
+/**
+ * Spacing scale (8px base) and radii, mirrored in CSS.
+ * Kept here so generated artefacts (deck, exports) stay consistent with the app.
+ */
+export const SPACING = [0, 4, 8, 12, 16, 24, 32, 48, 64, 96] as const;
+export const RADIUS = { control: 10, card: 14 } as const;

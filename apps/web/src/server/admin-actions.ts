@@ -328,12 +328,12 @@ export async function exportInvitesAction(cohortId: string): Promise<string> {
   const env = getEnvConfig();
   const teams = await store.teams.listTeams(cohortId);
 
-  const { MemoryDataStore } = await import('@ohj/shared');
-  const memory = store instanceof MemoryDataStore ? store : null;
+  const { asDemoStore } = await import('@ohj/shared');
+  const demo = asDemoStore(store);
 
   const rows = teams
     .map((team) => {
-      const token = memory?.getDemoInviteToken(team.id);
+      const token = demo?.getDemoInviteToken(team.id) ?? null;
       return token
         ? {
             groupNumber: team.groupNumber,
@@ -801,6 +801,79 @@ export async function exportShortlistAction(cohortId: string): Promise<string> {
 // --------------------------------------------------------------------------
 // Settings
 // --------------------------------------------------------------------------
+
+/**
+ * Judging configuration, entered in the units an operator thinks in.
+ *
+ * Minutes are converted to milliseconds here, so a programme operator never has
+ * to type 480000 and the stored value stays in the unit the worker expects.
+ */
+export async function updateJudgingSettingsAction(formData: FormData): Promise<AdminActionResult> {
+  await requireAdmin();
+  await assertCsrf(String(formData.get('csrf') ?? ''));
+  const store = getStore();
+  const cohortId = String(formData.get('cohortId') ?? '');
+
+  const cohort = await store.cohorts.getCohort(cohortId);
+  if (!cohort) return { ok: false, error: 'Cohort not found.' };
+
+  const number = (key: string, fallback: number) => {
+    const raw = Number(formData.get(key));
+    return Number.isFinite(raw) ? raw : fallback;
+  };
+
+  const concurrency = Math.round(number('workerConcurrency', cohort.assessmentConfig.workerConcurrency));
+  const browserMinutes = number('browserMinutes', cohort.assessmentConfig.browserBudgetMs / 60_000);
+  const maxAttempts = Math.round(number('maxAttempts', cohort.assessmentConfig.maxAttempts));
+  const threshold = number('lowConfidenceThreshold', cohort.assessmentConfig.lowConfidenceThreshold);
+  const shortlistTarget = Math.round(number('shortlistTarget', cohort.shortlistTarget));
+
+  if (concurrency < 1 || concurrency > 32) {
+    return { ok: false, error: 'Concurrent assessments must be between 1 and 32.' };
+  }
+  if (browserMinutes < 1 || browserMinutes > 30) {
+    return { ok: false, error: 'Maximum browser-testing time must be between 1 and 30 minutes.' };
+  }
+  if (maxAttempts < 1 || maxAttempts > 10) {
+    return { ok: false, error: 'Maximum retries must be between 1 and 10.' };
+  }
+  if (threshold < 0 || threshold > 1) {
+    return { ok: false, error: 'The low-confidence threshold must be between 0 and 1.' };
+  }
+  if (shortlistTarget < 1 || shortlistTarget > 100) {
+    return { ok: false, error: 'The shortlist size must be between 1 and 100.' };
+  }
+
+  const before = { ...cohort.assessmentConfig, shortlistTarget: cohort.shortlistTarget };
+
+  await store.cohorts.updateCohort(cohortId, {
+    shortlistTarget,
+    assessmentConfig: {
+      ...cohort.assessmentConfig,
+      workerConcurrency: concurrency,
+      // Friendly minutes in, canonical milliseconds stored.
+      browserBudgetMs: Math.round(browserMinutes * 60_000),
+      maxAttempts,
+      lowConfidenceThreshold: threshold,
+    },
+  });
+
+  await auditAdminAction({
+    action: 'judging_settings.updated',
+    entityType: 'cohort',
+    entityId: cohortId,
+    cohortId,
+    before,
+    after: { concurrency, browserMinutes, maxAttempts, threshold, shortlistTarget },
+  });
+  revalidatePath('/admin/settings');
+  revalidatePath('/admin/assessment-queue');
+
+  return {
+    ok: true,
+    message: `Saved. Browser testing is limited to ${browserMinutes} minute${browserMinutes === 1 ? '' : 's'} per submission, ${concurrency} at a time.`,
+  };
+}
 
 export async function updateSettingAction(formData: FormData): Promise<AdminActionResult> {
   await requireAdmin();

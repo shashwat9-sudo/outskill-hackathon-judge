@@ -1,88 +1,89 @@
 import Link from 'next/link';
-import { headers } from 'next/headers';
 import { getAdminSession } from '@/server/admin-auth';
 import { logoutAction } from '@/server/admin-actions';
-import { Badge } from '@/components/ui';
+import { getStore, isDemo } from '@/lib/store';
+import { StatusPill } from '@/components/ui';
+import { AdminNav } from './admin-nav';
 
 /**
  * Admin shell.
  *
- * The login page renders bare; every other admin page gets the navigation
- * chrome. Individual pages still call `requireAdmin()` themselves — a layout is
- * a rendering concern, not an authorisation boundary.
+ * The login page renders bare; every other admin page gets the sidebar. Pages
+ * still call `requireAdmin()` themselves — a layout is a rendering concern, not
+ * an authorisation boundary.
+ *
+ * Navigation is labelled for programme operators: "Judging" rather than
+ * "Queue", "Shortlist" rather than "Ranking", "Finalists" rather than
+ * "Final four". Routes are unchanged.
  */
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
-  const headerList = await headers();
-  const pathname = headerList.get('x-invoke-path') ?? headerList.get('x-pathname') ?? '';
   const session = await getAdminSession();
 
   if (!session) {
-    return <div className="min-h-screen bg-surface-alt">{children}</div>;
+    return <div className="min-h-screen bg-canvas">{children}</div>;
   }
 
+  const cohorts = await getStore().cohorts.listCohorts();
+  const activeCohort = cohorts.find((c) => c.status === 'judging' || c.status === 'open') ?? cohorts[0];
+
   return (
-    <div className="min-h-screen bg-surface-alt">
-      <header className="border-b border-line bg-ink text-surface">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-6 py-3">
-          <div className="flex items-center gap-3">
-            <Link href="/admin" className="text-sm font-bold uppercase tracking-widest text-brand-bright">
-              Outskill Judge
-            </Link>
-            <Badge tone="brand" className="border-surface/30 bg-transparent text-surface">
-              Internal
-            </Badge>
+    <div className="min-h-screen bg-canvas lg:flex">
+      <AdminNav
+        username={session.username}
+        cohortName={activeCohort?.name ?? null}
+        cohortStatus={activeCohort?.status ?? null}
+        demo={isDemo()}
+      />
+
+      <div className="min-w-0 flex-1">
+        {/* Desktop header strip: cohort context and sign-out. */}
+        <header className="hidden border-b border-line px-8 py-4 lg:block">
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              {activeCohort ? (
+                <>
+                  <span className="text-sm text-muted">Cohort</span>
+                  <span className="font-semibold text-ink">{activeCohort.name}</span>
+                  <StatusPill status={activeCohort.status} />
+                </>
+              ) : (
+                <span className="text-sm text-muted">No cohort yet</span>
+              )}
+            </div>
+            <form action={logoutAction} className="flex items-center gap-3">
+              <span className="text-sm text-muted">
+                Signed in as <strong className="text-ink">{session.username}</strong> (shared)
+              </span>
+              <button
+                type="submit"
+                className="rounded-[10px] border border-line px-3 py-1.5 text-sm font-semibold text-ink transition-colors hover:border-brand-edge"
+              >
+                Sign out
+              </button>
+            </form>
           </div>
-          <form action={logoutAction} className="flex items-center gap-3">
-            <span className="text-sm text-surface/70">
-              Signed in as <strong className="text-surface">{session.username}</strong> (shared)
-            </span>
-            <button type="submit" className="text-sm font-semibold text-brand-bright underline">
-              Sign out
-            </button>
-          </form>
-        </div>
+        </header>
 
-        <nav aria-label="Admin sections" className="mx-auto max-w-7xl px-6">
-          <ul className="flex flex-wrap gap-1 pb-1">
-            {NAV.map((item) => {
-              const active = pathname.startsWith(item.href);
-              return (
-                <li key={item.href}>
-                  <Link
-                    href={item.href}
-                    aria-current={active ? 'page' : undefined}
-                    className="inline-block rounded-t-md px-3 py-2 text-sm font-medium text-surface/80 hover:bg-surface/10 hover:text-surface aria-[current=page]:bg-surface-alt aria-[current=page]:text-ink"
-                  >
-                    {item.label}
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
-        </nav>
-      </header>
+        <main id="main" className="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8 lg:py-10">
+          {children}
+        </main>
 
-      <main id="main" className="mx-auto max-w-7xl px-6 py-8">
-        {children}
-      </main>
+        <footer className="border-t border-line px-4 py-6 no-print sm:px-6 lg:px-8">
+          <p className="mx-auto max-w-6xl text-xs text-muted">
+            Everything on these pages is internal. Scores, evidence, ranking and shortlist
+            information are never shown to participants. Actions are logged as{' '}
+            <code className="font-mono">shared-admin</code> and cannot be attributed to an
+            individual.
+          </p>
+        </footer>
+      </div>
 
-      <footer className="border-t border-line bg-surface py-4 no-print">
-        <p className="mx-auto max-w-7xl px-6 text-xs text-muted">
-          Everything on these pages is internal. Scores, evidence, ranking and shortlist information
-          are never shown to participants. Actions are logged as <code>shared-admin</code> and cannot
-          be attributed to an individual.
-        </p>
-      </footer>
+      <Link
+        href="/"
+        className="sr-only focus:not-sr-only focus:fixed focus:bottom-4 focus:left-4 focus:z-50 focus:rounded focus:bg-brand focus:px-3 focus:py-2 focus:font-bold focus:text-black"
+      >
+        Back to home
+      </Link>
     </div>
   );
 }
-
-const NAV = [
-  { href: '/admin', label: 'Overview' },
-  { href: '/admin/cohorts', label: 'Cohorts' },
-  { href: '/admin/assessment-queue', label: 'Queue' },
-  { href: '/admin/ranking', label: 'Ranking' },
-  { href: '/admin/final-selection', label: 'Final four' },
-  { href: '/admin/resources', label: 'Resources' },
-  { href: '/admin/settings', label: 'Settings' },
-];

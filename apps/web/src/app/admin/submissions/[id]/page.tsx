@@ -49,7 +49,7 @@ export default async function SubmissionDetailPage({ params }: { params: Promise
               {detail.submission.status}
             </Badge>
             {detail.job && <Badge tone="info">{detail.job.stage.replace(/_/g, ' ')}</Badge>}
-            {detail.rank && <Badge tone="brand">rank {detail.rank}</Badge>}
+            {detail.rank && <Badge tone="accent">rank {detail.rank}</Badge>}
             {detail.inShortlist && <Badge tone="success">top 10</Badge>}
             {detail.summary?.lowConfidence && <Badge tone="warning">low confidence</Badge>}
           </div>

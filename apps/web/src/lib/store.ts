@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { MemoryDataStore, loadEnv, type DataStore, type Env } from '@ohj/shared';
+import { MemoryDataStore, asDemoStore, loadEnv, type DataStore, type Env } from '@ohj/shared';
 
 /**
  * Data-store singleton.
@@ -45,10 +45,16 @@ export function getStore(): DataStore {
   return globalRef[STORE_KEY];
 }
 
-/** Demo-only: the memory driver, for helpers that need fixture internals. */
-export function getMemoryStore(): MemoryDataStore | null {
-  const store = getStore();
-  return store instanceof MemoryDataStore ? store : null;
+/**
+ * Demo-only accessor for fixture internals.
+ *
+ * Feature-detects rather than using `instanceof`: the store is cached on
+ * `globalThis` and survives module reloading, so a class-identity check would
+ * compare against a stale constructor and return null — which is what made the
+ * demo invite links vanish from the home page after any hot reload.
+ */
+export function getDemoStore() {
+  return asDemoStore(getStore());
 }
 
 export function isDemo(): boolean {
