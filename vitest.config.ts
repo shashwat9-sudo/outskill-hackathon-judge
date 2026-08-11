@@ -8,6 +8,9 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
+      // The client entry must come first — an exact-prefix alias for
+      // '@ohj/shared' would otherwise swallow '@ohj/shared/client'.
+      '@ohj/shared/client': resolve('./packages/shared/src/client.ts'),
       '@ohj/shared': resolve('./packages/shared/src/index.ts'),
       '@ohj/ai': resolve('./packages/ai/src/index.ts'),
       '@': resolve('./apps/web/src'),

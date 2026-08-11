@@ -20,7 +20,7 @@ export function parseCsv(input: string): string[][] {
   let inQuotes = false;
   let i = 0;
 
-  const text = input.replace(/^﻿/, ''); // strip BOM
+  const text = input.replace(/^\uFEFF/, ''); // strip BOM (escaped, not a literal)
 
   while (i < text.length) {
     const char = text[i] as string;
