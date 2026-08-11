@@ -79,14 +79,22 @@ export function AdminForm({
   );
 }
 
-/** Download helper for CSV exports produced by a server action. */
+/**
+ * Download helper for CSV exports produced by a server action.
+ *
+ * Takes the server action itself plus its argument, rather than a closure over
+ * it: a plain function cannot cross the server/client boundary, but a reference
+ * to a `'use server'` action can.
+ */
 export function DownloadButton({
   filename,
-  fetcher,
+  action,
+  arg,
   label,
 }: {
   filename: string;
-  fetcher: () => Promise<string>;
+  action: (arg: string) => Promise<string>;
+  arg: string;
   label: string;
 }) {
   const [pending, setPending] = React.useState(false);
@@ -96,7 +104,7 @@ export function DownloadButton({
     setPending(true);
     setError(null);
     try {
-      const csv = await fetcher();
+      const csv = await action(arg);
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement('a');

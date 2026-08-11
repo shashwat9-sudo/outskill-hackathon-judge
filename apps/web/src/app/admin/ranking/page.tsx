@@ -1,7 +1,11 @@
 import Link from 'next/link';
 import { getStore } from '@/lib/store';
 import { requireAdmin } from '@/server/admin-auth';
-import { exportShortlistAction, generateRankingAction } from '@/server/admin-actions';
+import {
+  exportShortlistAction,
+  generateRankingAction,
+  runConsistencyPassAction,
+} from '@/server/admin-actions';
 import { AdminForm, DownloadButton } from '@/components/admin-form';
 import { Alert, Badge, Card, CardHeader, EmptyState, Field, Input, Table, Td, Th } from '@/components/ui';
 
@@ -38,7 +42,8 @@ export default async function RankingPage() {
           <DownloadButton
             label="Export shortlist CSV"
             filename={`shortlist-${cohort.code}.csv`}
-            fetcher={() => exportShortlistAction(cohort.id)}
+            action={exportShortlistAction}
+            arg={cohort.id}
           />
         )}
       </div>
@@ -60,6 +65,23 @@ export default async function RankingPage() {
           </Field>
         </AdminForm>
       </Card>
+
+      {snapshot && (
+        <Card>
+          <CardHeader
+            title="Second scoring pass"
+            description="Runs only where a disagreement would change an outcome: the top 20, low-confidence cases, open manual reviews, submissions within two points of the cutoff, close ties, and disputed scores."
+          />
+          <AdminForm
+            action={runConsistencyPassAction}
+            csrfToken={session.csrfToken}
+            submitLabel="Queue consistency pass"
+            submitVariant="secondary"
+          >
+            <input type="hidden" name="cohortId" value={cohort.id} />
+          </AdminForm>
+        </Card>
+      )}
 
       {!snapshot ? (
         <EmptyState

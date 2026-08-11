@@ -6,6 +6,7 @@ import {
   assertDisqualificationAllowed,
   buildInviteCsv,
   parseTeamImportCsv,
+  selectForConsistencyReview,
   toCsv,
   validateFinalSelection,
   type CohortStatus,
@@ -687,6 +688,83 @@ export async function clearFinalSelectionAction(formData: FormData): Promise<Adm
   });
   revalidatePath('/admin/final-selection');
   return { ok: true, message: 'Final selection cleared.' };
+}
+
+/**
+ * Select which submissions get a second scoring pass.
+ *
+ * Running a second pass on everyone roughly doubles AI cost for little benefit;
+ * running it on nobody leaves the decisions that actually matter — the ones
+ * near the cutoff — resting on a single pass. This picks exactly the cases
+ * where a disagreement would change an outcome, and re-queues them.
+ */
+export async function runConsistencyPassAction(formData: FormData): Promise<AdminActionResult> {
+  await requireAdmin();
+  await assertCsrf(String(formData.get('csrf') ?? ''));
+  const store = getStore();
+  const cohortId = String(formData.get('cohortId') ?? '');
+
+  const cohort = await store.cohorts.getCohort(cohortId);
+  const snapshot = await store.ranking.getCurrentSnapshot(cohortId);
+  if (!cohort || !snapshot) {
+    return { ok: false, error: 'Generate a ranking snapshot before running a consistency pass.' };
+  }
+
+  const flags = await store.assessment.listManualReviewFlags(cohortId);
+  const disqualifications = await store.assessment.listDisqualifications(cohortId);
+
+  // The stored vector is a loose jsonb map; rebuild the typed shape the
+  // selector expects rather than widening its contract.
+  const rankedEntries = snapshot.entries.map((e) => ({
+    submissionId: e.submissionId,
+    rank: e.entry.rank,
+    totalScore: e.entry.totalScore,
+    meanConfidence: e.entry.meanConfidence,
+    inShortlist: e.entry.inShortlist,
+    tiebreakVector: {
+      total: e.entry.tiebreakVector.total ?? e.entry.totalScore,
+      core_workflow: e.entry.tiebreakVector.core_workflow ?? 0,
+      stability: e.entry.tiebreakVector.stability ?? 0,
+      ai_usefulness: e.entry.tiebreakVector.ai_usefulness ?? 0,
+      learning_execution: e.entry.tiebreakVector.learning_execution ?? 0,
+      unresolvedRisks: e.entry.tiebreakVector.unresolvedRisks ?? 0,
+    },
+  }));
+
+  const candidates = selectForConsistencyReview(rankedEntries, {
+    shortlistTarget: cohort.shortlistTarget,
+    lowConfidenceIds: new Set(snapshot.entries.filter((e) => e.lowConfidence).map((e) => e.submissionId)),
+    manualReviewIds: new Set(flags.filter((f) => f.status === 'open').map((f) => f.submissionId)),
+    disputedIds: new Set(
+      disqualifications.filter((d) => d.status === 'proposed').map((d) => d.submissionId),
+    ),
+  });
+
+  for (const candidate of candidates) {
+    const job = await store.assessment.getJobBySubmission(candidate.submissionId);
+    if (!job) continue;
+    await store.assessment.advanceStage(job.id, 'consistency_review');
+  }
+
+  await auditAdminAction({
+    action: 'consistency_pass.queued',
+    entityType: 'cohort',
+    entityId: cohortId,
+    cohortId,
+    after: {
+      count: candidates.length,
+      triggers: candidates.map((c) => ({ submissionId: c.submissionId, triggers: c.triggers })),
+    },
+  });
+  revalidatePath('/admin/ranking');
+
+  return {
+    ok: true,
+    message:
+      candidates.length === 0
+        ? 'No submissions met a second-pass trigger.'
+        : `Queued ${candidates.length} submission${candidates.length === 1 ? '' : 's'} for a second scoring pass (top 20, low confidence, manual review, near the cutoff, close ties, or disputed).`,
+  };
 }
 
 /** Private shortlist export, for internal use only. */

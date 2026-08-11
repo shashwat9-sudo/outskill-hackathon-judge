@@ -70,7 +70,8 @@ export default async function TeamsPage({ params }: { params: Promise<{ id: stri
             <DownloadButton
               label="Download invite CSV"
               filename={`invites-${cohort.code}.csv`}
-              fetcher={() => exportInvitesAction(cohort.id)}
+              action={exportInvitesAction}
+              arg={cohort.id}
             />
           }
         />

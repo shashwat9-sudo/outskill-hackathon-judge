@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Outskill Hackathon Judge — internal briefing</title>
+<style>
+  :root {
+    --bg: #000000;
+    --surface: #111111;
+    --text: #FFFFFF;
+    --muted: #D4D4D4;
+    --accent: #00C853;
+    --accent-deep: #064E2B;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    line-height: 1.5;
+  }
+  .slide {
+    position: relative;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    padding: 4rem;
+    border-bottom: 1px solid rgba(255,255,255,.12);
+    page-break-after: always;
+  }
+  .slide-inner { max-width: 60rem; width: 100%; margin: 0 auto; }
+  .title-slide h2 { font-size: clamp(3rem, 8vw, 5.5rem); }
+  .title-slide { background: linear-gradient(160deg, var(--bg) 55%, var(--accent-deep) 100%); }
+  .kicker {
+    color: var(--accent);
+    font-size: .8rem;
+    font-weight: 700;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    margin: 0 0 .75rem;
+  }
+  h2 { font-size: clamp(1.9rem, 4.5vw, 3rem); line-height: 1.1; margin: 0 0 1.25rem; letter-spacing: -.02em; }
+  .lede { font-size: clamp(1.05rem, 2vw, 1.4rem); color: var(--muted); max-width: 48rem; margin: 0 0 1.5rem; }
+  ul { margin: 0; padding: 0; list-style: none; }
+  li {
+    position: relative;
+    padding-left: 1.75rem;
+    margin-bottom: .9rem;
+    font-size: clamp(.98rem, 1.6vw, 1.15rem);
+    max-width: 52rem;
+  }
+  li::before {
+    content: '';
+    position: absolute;
+    left: 0; top: .55em;
+    width: .6rem; height: .6rem;
+    background: var(--accent);
+    border-radius: 1px;
+  }
+  table { border-collapse: collapse; width: 100%; max-width: 52rem; margin-top: .5rem; }
+  th, td { text-align: left; padding: .6rem .9rem; border-bottom: 1px solid rgba(255,255,255,.14); font-size: 1rem; }
+  th { color: var(--accent); font-size: .78rem; letter-spacing: .1em; text-transform: uppercase; }
+  tbody tr:last-child td { font-weight: 700; }
+  .note { margin-top: 1.5rem; color: var(--muted); font-size: .92rem; border-left: 3px solid var(--accent); padding-left: .9rem; }
+  .page-number { position: absolute; right: 2rem; bottom: 1.5rem; color: var(--muted); font-size: .78rem; margin: 0; }
+  @media print {
+    .slide { min-height: 0; height: 100vh; border: 0; }
+  }
+</style>
+</head>
+<body>
+<section class="slide title-slide" aria-label="Slide 1">
+  <div class="slide-inner"><p class="kicker">Outskill · Internal</p>
+    <h2>Hackathon Judge</h2>
+    <p class="lede">Evidence-backed assessment for 300–500 hackathon submissions, in the ten hours between the deadline and the shortlist.</p></div>
+  <p class="page-number" aria-hidden="true">1 / 11</p>
+</section>
+<section class="slide" aria-label="Slide 2">
+  <div class="slide-inner"><p class="kicker">01</p>
+    <h2>The problem with judging by hand</h2>
+    <ul><li>A Google Form produces submissions nobody validated — decks that are actually Loom links, credentials pasted into URL fields, links that were never reachable.</li><li>External mentors each open a few products, form an impression, and write freehand feedback. Coverage is uneven and standards drift between reviewers.</li><li>Nobody actually exercises the product deeply. There is no time.</li><li>Scores and notes are collated by hand across spreadsheets and chat.</li><li>Ten hours between the Day 13 deadline and the Day 14 shortlist. It only works because reviewers cut depth.</li></ul></div>
+  <p class="page-number" aria-hidden="true">2 / 11</p>
+</section>
+<section class="slide" aria-label="Slide 3">
+  <div class="slide-inner"><p class="kicker">02</p>
+    <h2>What we built</h2>
+    <p class="lede">A platform that takes a submission from intake to a defensible private ranking — where &quot;evidence&quot; means a real browser actually drove the product.</p>
+    <ul><li>Structured intake that makes the historical data-quality failures impossible</li><li>Automated preflight, artifact analysis and product-specific test planning</li><li>Deep Playwright testing of the live product</li><li>Evidence-backed scores against a fixed 100-point rubric</li><li>Private ranking and a private top 10</li><li>Humans choose the final four</li></ul></div>
+  <p class="page-number" aria-hidden="true">3 / 11</p>
+</section>
+<section class="slide" aria-label="Slide 4">
+  <div class="slide-inner"><p class="kicker">03</p>
+    <h2>The participant journey</h2>
+    <ul><li>One secure invite link per team. No account, no password, no signup.</li><li>Six autosaving steps: team, product, live product, artifacts, learning evidence, declarations.</li><li>The form asks for what teams already wrote in their workbook — the MoSCoW scope, the bug log, the reflection.</li><li>A review screen shows exactly what is missing, field by field.</li><li>Typed FINAL SUBMIT locks the submission and issues a receipt.</li><li>Participants see the rubric and the deadline. They never see a score, a rank, or a shortlist.</li></ul></div>
+  <p class="page-number" aria-hidden="true">4 / 11</p>
+</section>
+<section class="slide" aria-label="Slide 5">
+  <div class="slide-inner"><p class="kicker">04</p>
+    <h2>The assessment pipeline</h2>
+    <table><thead><tr><th scope="col">Stage</th><th scope="col">What happens</th></tr></thead><tbody><tr><td>preflight</td><td>13 checks; every attempt recorded; outage told apart from absence</td></tr><tr><td>artifact_analysis</td><td>Deck text, written submission, injection screening</td></tr><tr><td>test_plan_generation</td><td>A product-specific plan, constrained to a closed action set</td></tr><tr><td>browser_testing</td><td>Real Chromium drives the live product</td></tr><tr><td>evidence_review</td><td>Evidence assembled per rubric category</td></tr><tr><td>scoring</td><td>Eight categories, each with evidence and confidence</td></tr><tr><td>consistency_review</td><td>Second pass only where it could change an outcome</td></tr><tr><td>completed</td><td>Ranked, if eligible</td></tr></tbody></table>
+    <p class="note">manual_review, failed and disqualified are outcomes, not errors.</p></div>
+  <p class="page-number" aria-hidden="true">5 / 11</p>
+</section>
+<section class="slide" aria-label="Slide 6">
+  <div class="slide-inner"><p class="kicker">05</p>
+    <h2>Deep testing, not a screenshot</h2>
+    <ul><li>A fresh isolated browser per submission, eight-minute budget, downloads disabled.</li><li>Runs the team’s own declared must-have workflow — twice, because that is the stability bar they were taught.</li><li>Proves persistence by reloading and checking the data survived.</li><li>Captures console errors, failed requests, dead ends, an accessibility scan, and a mobile pass.</li><li>Everything it creates is prefixed OUTSKILL-JUDGE- and cleaned up afterwards.</li><li>Test plans are data, never code. There is no action that can execute anything.</li></ul></div>
+  <p class="page-number" aria-hidden="true">6 / 11</p>
+</section>
+<section class="slide" aria-label="Slide 7">
+  <div class="slide-inner"><p class="kicker">06</p>
+    <h2>The rubric</h2>
+    <table><thead><tr><th scope="col">Category</th><th scope="col">Points</th></tr></thead><tbody><tr><td>Problem and target-user clarity</td><td>15</td></tr><tr><td>Core workflow functionality</td><td>25</td></tr><tr><td>Stability, data and technical completeness</td><td>15</td></tr><tr><td>AI usefulness and differentiation</td><td>15</td></tr><tr><td>Learning and execution quality</td><td>10</td></tr><tr><td>UX and accessibility</td><td>10</td></tr><tr><td>Practical or commercial potential</td><td>5</td></tr><tr><td>Deck and demo clarity</td><td>5</td></tr><tr><td>Total</td><td>100</td></tr></tbody></table>
+    <p class="note">Fixed and public. The test scripts, thresholds and tie-break rules are not.</p></div>
+  <p class="page-number" aria-hidden="true">7 / 11</p>
+</section>
+<section class="slide" aria-label="Slide 8">
+  <div class="slide-inner"><p class="kicker">07</p>
+    <h2>Every score carries its evidence</h2>
+    <ul><li>Supporting evidence — what was actually observed.</li><li>Contradictory evidence — where the product disagreed with the claim.</li><li>Missing evidence — what could not be checked, stated plainly.</li><li>Confidence 0–1, about how much there was to go on, not how good the product is.</li><li>Observed browser evidence outweighs any unsupported deck claim.</li><li>A run that timed out says so. Unreached steps are unknown, not failed.</li></ul>
+    <p class="note">A category with no evidence is flagged as unsupported rather than quietly scored.</p></div>
+  <p class="page-number" aria-hidden="true">8 / 11</p>
+</section>
+<section class="slide" aria-label="Slide 9">
+  <div class="slide-inner"><p class="kicker">08</p>
+    <h2>Private top 10. Human final four.</h2>
+    <ul><li>Eligible submissions are ranked; ties break on core workflow, then stability, then AI usefulness, then learning, then fewer unresolved risks.</li><li>Ranking snapshots are immutable, so the ranking a decision was made against stays reconstructable.</li><li>The top 10 is highlighted privately, for reviewers only.</li><li>Admins review evidence, override with a reason, and the machine’s original score is preserved.</li><li>The final four are chosen by a person, in one place, with a recorded reason each.</li><li>No worker, no job stage and no model response can write a winner.</li></ul></div>
+  <p class="page-number" aria-hidden="true">9 / 11</p>
+</section>
+<section class="slide" aria-label="Slide 10">
+  <div class="slide-inner"><p class="kicker">09</p>
+    <h2>Privacy and safety</h2>
+    <ul><li>Participants cannot reach judging data — the capability is absent, not merely hidden.</li><li>Demo credentials are encrypted at rest, masked in the UI, and never sent to an AI model.</li><li>PII is redacted before any model call; providers see an anonymised submission ID.</li><li>The worker cannot reach private networks — resolved addresses are checked before every navigation.</li><li>Prompt injection cannot change behaviour, because behaviour comes from validated structure, not prose.</li><li>Disqualification is limited to eleven grounds. &quot;Low score&quot; is not one, and the database will not store it.</li></ul></div>
+  <p class="page-number" aria-hidden="true">10 / 11</p>
+</section>
+<section class="slide" aria-label="Slide 11">
+  <div class="slide-inner"><p class="kicker">10</p>
+    <h2>The night it matters</h2>
+    <table><thead><tr><th scope="col">Time (IST)</th><th scope="col">What happens</th></tr></thead><tbody><tr><td>11:59 PM Day 13</td><td>Deadline. Cohort closed.</td></tr><tr><td>12:00 AM</td><td>Judging queued. Worker started.</td></tr><tr><td>12:30 AM</td><td>First checkpoint — is the projection green?</td></tr><tr><td>2:00–5:00 AM</td><td>Monitored run. Flags triaged as they appear.</td></tr><tr><td>6:00 AM</td><td>Assessment complete. Manual reviews cleared.</td></tr><tr><td>7:00 AM</td><td>Ranking snapshot. Second scoring pass.</td></tr><tr><td>7:30–9:00 AM</td><td>Humans read the evidence for the top 10.</td></tr><tr><td>9:00–9:45 AM</td><td>Final four chosen, with reasons.</td></tr><tr><td>10:00 AM Day 14</td><td>Private shortlist ready.</td></tr></tbody></table>
+    <p class="note">Nothing is announced automatically. Announcement is a separate human act.</p></div>
+  <p class="page-number" aria-hidden="true">11 / 11</p>
+</section>
+</body>
+</html>
