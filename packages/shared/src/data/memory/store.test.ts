@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { MemoryDataStore } from './store.js';
-import { RUBRIC_CATEGORIES } from '../../rubric/index.js';
-import { DEMO_COHORT_ID, demoSubmissionId, demoTeamId } from '../../fixtures/demo.js';
+import { MemoryDataStore } from './store';
+import { RUBRIC_CATEGORIES } from '../../rubric/index';
+import { DEMO_COHORT_ID, demoSubmissionId, demoTeamId } from '../../fixtures/demo';
 
 let store: MemoryDataStore;
 

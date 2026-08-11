@@ -14,7 +14,7 @@
  */
 
 import { z } from 'zod';
-import { validateProductUrl, validateDemoVideoUrl } from '../security/url.js';
+import { validateProductUrl, validateDemoVideoUrl } from '../security/url';
 
 // --------------------------------------------------------------------------
 // Shared field helpers

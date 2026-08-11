@@ -46,8 +46,8 @@ import type {
   TeamMember,
   TestPlan,
   TestPlanStep,
-} from './types.js';
-import type { AssessmentStage, CohortStatus, SubmissionStatus } from '../domain/status.js';
+} from './types';
+import type { AssessmentStage, CohortStatus, SubmissionStatus } from '../domain/status';
 
 // --------------------------------------------------------------------------
 // Participant surface — deliberately narrow

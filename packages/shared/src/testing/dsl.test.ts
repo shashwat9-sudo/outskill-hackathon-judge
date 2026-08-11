@@ -7,7 +7,7 @@ import {
   makeTestValue,
   testStepSchema,
   validatePlanSteps,
-} from './dsl.js';
+} from './dsl';
 
 describe('test-action DSL containment', () => {
   it('exposes exactly the sixteen permitted actions', () => {

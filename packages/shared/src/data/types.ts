@@ -6,11 +6,11 @@
  * so application code cannot tell which backend it is running on.
  */
 
-import type { RubricCategoryKey, EvidenceSource } from '../rubric/index.js';
-import type { AssessmentStage, CohortStatus, SubmissionStatus } from '../domain/status.js';
-import type { DisqualificationReason } from '../domain/disqualification.js';
-import type { ConsistencyTrigger } from '../domain/ranking.js';
-import type { TestStep } from '../testing/dsl.js';
+import type { RubricCategoryKey, EvidenceSource } from '../rubric/index';
+import type { AssessmentStage, CohortStatus, SubmissionStatus } from '../domain/status';
+import type { DisqualificationReason } from '../domain/disqualification';
+import type { ConsistencyTrigger } from '../domain/ranking';
+import type { TestStep } from '../testing/dsl';
 
 export type Actor = 'shared-admin' | 'participant' | 'system' | 'worker';
 

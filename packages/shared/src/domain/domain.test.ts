@@ -8,8 +8,8 @@ import {
   isCohortAcceptingSubmissions,
   nextHappyStage,
   ASSESSMENT_HAPPY_PATH,
-} from './status.js';
-import { evaluateDeadline, evaluateShortlistWindow, isSubmissionLate, shortlistDueAt } from './deadline.js';
+} from './status';
+import { evaluateDeadline, evaluateShortlistWindow, isSubmissionLate, shortlistDueAt } from './deadline';
 import {
   DISQUALIFICATION_REASONS,
   NEVER_DISQUALIFY,
@@ -18,16 +18,16 @@ import {
   isPermittedDisqualificationReason,
   proposeDisqualifications,
   type DisqualificationCandidateInput,
-} from './disqualification.js';
+} from './disqualification';
 import {
   compareForRanking,
   rankSubmissions,
   selectForConsistencyReview,
   validateFinalSelection,
   type RankableSubmission,
-} from './ranking.js';
-import { anonymiseSubmissionId, generateReceiptId, isValidReceiptId } from './ids.js';
-import { RUBRIC_CATEGORIES } from '../rubric/index.js';
+} from './ranking';
+import { anonymiseSubmissionId, generateReceiptId, isValidReceiptId } from './ids';
+import { RUBRIC_CATEGORIES } from '../rubric/index';
 
 // --------------------------------------------------------------------------
 // Status transitions

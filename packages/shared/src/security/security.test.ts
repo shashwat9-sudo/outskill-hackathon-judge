@@ -6,7 +6,7 @@ import {
   validateDemoVideoUrl,
   validateProductUrl,
   validateUrl,
-} from './url.js';
+} from './url';
 import {
   csrfTokenMatches,
   decryptSecret,
@@ -19,14 +19,14 @@ import {
   maskSecret,
   parseEncryptionKey,
   serialiseEnvelope,
-} from './crypto.js';
+} from './crypto';
 import {
   isLockedOut,
   registerFailedAttempt,
   registerSuccessfulLogin,
   MAX_FAILED_ATTEMPTS,
   validatePasswordStrength,
-} from './password.js';
+} from './password';
 
 // --------------------------------------------------------------------------
 // SSRF

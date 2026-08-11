@@ -6,7 +6,7 @@
  * without a database.
  */
 
-import { RUBRIC_CATEGORIES, RUBRIC_VERSION, totalScore, weightedScore } from '../../rubric/index.js';
+import { RUBRIC_CATEGORIES, RUBRIC_VERSION, totalScore, weightedScore } from '../../rubric/index';
 import {
   deserialiseEnvelope,
   decryptSecret,
@@ -14,13 +14,13 @@ import {
   generateInviteToken,
   hashInviteToken,
   serialiseEnvelope,
-} from '../../security/crypto.js';
-import { compareForRanking, type RankableSubmission } from '../../domain/ranking.js';
-import { canParticipantEdit, type AssessmentStage, type CohortStatus, type SubmissionStatus } from '../../domain/status.js';
-import { isSubmissionLate } from '../../domain/deadline.js';
-import { generateReceiptId, newId } from '../../domain/ids.js';
-import { assertDisqualificationAllowed } from '../../domain/disqualification.js';
-import type { RubricCategoryKey } from '../../rubric/index.js';
+} from '../../security/crypto';
+import { compareForRanking, type RankableSubmission } from '../../domain/ranking';
+import { canParticipantEdit, type AssessmentStage, type CohortStatus, type SubmissionStatus } from '../../domain/status';
+import { isSubmissionLate } from '../../domain/deadline';
+import { generateReceiptId, newId } from '../../domain/ids';
+import { assertDisqualificationAllowed } from '../../domain/disqualification';
+import type { RubricCategoryKey } from '../../rubric/index';
 import type {
   AdminAccount,
   AdminSession,
@@ -55,7 +55,7 @@ import type {
   TeamMember,
   TestPlan,
   TestPlanStep,
-} from '../types.js';
+} from '../types';
 import type {
   AdminAuthStore,
   AssessmentStore,
@@ -72,8 +72,8 @@ import type {
   SubmissionStore,
   TeamImportResult,
   TeamStore,
-} from '../store.js';
-import { createEmptyDatabase, seedDemoDatabase, type MemoryDatabase } from './database.js';
+} from '../store';
+import { createEmptyDatabase, seedDemoDatabase, type MemoryDatabase } from './database';
 
 const DEMO_KEY = Buffer.alloc(32, 7);
 const clone = <T>(value: T): T => structuredClone(value);

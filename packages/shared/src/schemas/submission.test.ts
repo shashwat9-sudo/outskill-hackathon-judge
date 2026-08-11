@@ -12,7 +12,7 @@ import {
   productStepSchema,
   teamStepSchema,
   validateDeckUpload,
-} from './submission.js';
+} from './submission';
 
 describe('group number validation', () => {
   it('accepts a whole number in range and coerces a numeric string', () => {

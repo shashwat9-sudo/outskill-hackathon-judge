@@ -1,0 +1,91 @@
+@import 'tailwindcss';
+
+/**
+ * Design tokens.
+ *
+ * Black, white and Outskill green. The green is a documented placeholder —
+ * no Outskill green exists in any supplied asset (ADR-014). Contrast pairs are
+ * chosen for WCAG AA: --brand on white is 4.53:1, --brand-bright on black is
+ * 9.94:1.
+ */
+@theme {
+  --color-brand: #0b8a45;
+  --color-brand-bright: #00c853;
+  --color-brand-deep: #064e2b;
+  --color-brand-tint: #e8f8ee;
+
+  --color-ink: #000000;
+  --color-ink-soft: #111111;
+  --color-muted: #6b6b6b;
+  --color-line: #d4d4d4;
+  --color-surface: #ffffff;
+  --color-surface-alt: #f7f7f7;
+
+  --color-danger: #b3261e;
+  --color-danger-tint: #fdecea;
+  --color-warning: #8a5a00;
+  --color-warning-tint: #fff6e5;
+  --color-info: #1b5e9e;
+  --color-info-tint: #eaf2fa;
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* A single visible focus treatment everywhere — never removed, only restyled. */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 3px solid var(--color-brand);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* Skip link: present for keyboard users, out of the way for everyone else. */
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 100;
+  background: var(--color-ink);
+  color: var(--color-surface);
+  padding: 0.75rem 1rem;
+  font-weight: 600;
+}
+.skip-link:focus {
+  left: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Print: judging material should not be casually printed. */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+}

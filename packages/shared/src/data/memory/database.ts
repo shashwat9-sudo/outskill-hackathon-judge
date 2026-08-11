@@ -8,9 +8,9 @@
  * is nothing to optimise, and the postgres driver is where indexes belong.
  */
 
-import { RUBRIC_CATEGORIES, RUBRIC_VERSION, totalScore } from '../../rubric/index.js';
-import { generateInviteToken, encryptSecret, serialiseEnvelope } from '../../security/crypto.js';
-import { compareForRanking, type RankableSubmission } from '../../domain/ranking.js';
+import { RUBRIC_CATEGORIES, RUBRIC_VERSION, totalScore } from '../../rubric/index';
+import { generateInviteToken, encryptSecret, serialiseEnvelope } from '../../security/crypto';
+import { compareForRanking, type RankableSubmission } from '../../domain/ranking';
 import type {
   AdminAccount,
   AdminSession,
@@ -44,8 +44,8 @@ import type {
   TeamMember,
   TestPlan,
   TestPlanStep,
-} from '../types.js';
-import { IDEA_SEEDS } from '../../fixtures/ideas.js';
+} from '../types';
+import { IDEA_SEEDS } from '../../fixtures/ideas';
 import {
   buildDemoPreflight,
   buildDemoScores,
@@ -67,7 +67,7 @@ import {
   demoTeamId,
   id,
   type DemoScenario,
-} from '../../fixtures/demo.js';
+} from '../../fixtures/demo';
 
 export interface MemoryDatabase {
   adminAccount: AdminAccount | null;

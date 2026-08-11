@@ -10,7 +10,7 @@ import {
   roundToQuarter,
   totalScore,
   weightedScore,
-} from './index.js';
+} from './index';
 
 describe('rubric integrity', () => {
   it('sums to exactly 100 points', () => {

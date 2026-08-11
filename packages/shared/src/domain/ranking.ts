@@ -16,8 +16,8 @@
  * The tie-break chain is private: it is never exposed on a participant route.
  */
 
-import type { RubricCategoryKey } from '../rubric/index.js';
-import { totalScore, type CategoryScoreLike } from '../rubric/index.js';
+import type { RubricCategoryKey } from '../rubric/index';
+import { totalScore, type CategoryScoreLike } from '../rubric/index';
 
 /**
  * Categories consulted for tie-breaking, in priority order.

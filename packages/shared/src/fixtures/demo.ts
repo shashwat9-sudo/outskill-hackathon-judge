@@ -19,11 +19,11 @@
  *   61 — assessable but with weak evidence, flagged low confidence
  */
 
-import { deterministicId, generateReceiptId } from '../domain/ids.js';
-import type { RubricCategoryKey } from '../rubric/index.js';
-import { RUBRIC_CATEGORIES, RUBRIC_VERSION } from '../rubric/index.js';
-import type { AssessmentConfig } from '../data/types.js';
-import { IDEA_SEEDS } from './ideas.js';
+import { deterministicId, generateReceiptId } from '../domain/ids';
+import type { RubricCategoryKey } from '../rubric/index';
+import { RUBRIC_CATEGORIES, RUBRIC_VERSION } from '../rubric/index';
+import type { AssessmentConfig } from '../data/types';
+import { IDEA_SEEDS } from './ideas';
 
 const NS = 'ohj-demo';
 export const id = (name: string): string => deterministicId(NS, name);
