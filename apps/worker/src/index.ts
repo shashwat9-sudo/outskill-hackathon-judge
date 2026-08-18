@@ -10,6 +10,8 @@
  */
 
 import { mkdir, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   MemoryDataStore,
   Logger,
@@ -164,6 +166,12 @@ async function main(): Promise<void> {
   /*
    * The staging area for captured evidence, and only that.
    *
+   * The system temp directory, not the application directory. Two reasons, and
+   * the second only became visible in a container: these files are temporary by
+   * definition, and the image runs as an unprivileged user while /app belongs to
+   * root — so the worker could not create a directory beside its own source and
+   * crashed on EACCES before claiming anything.
+   *
    * Nothing durable lives here. Screenshots and traces land in this directory,
    * get uploaded, and are deleted once the web app confirms the object is in
    * the bucket. It is emptied at boot because anything left behind belongs to a
@@ -171,7 +179,7 @@ async function main(): Promise<void> {
    * since been retried by another worker, and in both cases the bytes are
    * orphans that would otherwise accumulate until the disk filled.
    */
-  const evidenceRoot = `${process.cwd()}/.local-evidence`;
+  const evidenceRoot = join(tmpdir(), 'ohj-evidence');
   await rm(evidenceRoot, { recursive: true, force: true }).catch(() => {});
   await mkdir(evidenceRoot, { recursive: true });
 
