@@ -26,6 +26,7 @@ export * from './domain/concurrency';
 export * from './domain/cohort-exclusivity';
 export * from './domain/cohort-deletion';
 export * from './domain/missing-items';
+export * from './domain/evidence-path';
 export * from './utils/learner-sheet';
 // Guide content is plain data; only its PDF renderer touches Buffer.
 export type * from './content/submission-guide';

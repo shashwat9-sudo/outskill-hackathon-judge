@@ -1,3 +1,4 @@
+import { createInMemoryStorage } from './storage';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createTestDatabase, type PgliteHandle } from './testing/pglite';
 import { buildAssessmentStore } from './repositories/assessment';
@@ -43,7 +44,7 @@ beforeEach(async () => {
   const seeded = await seedCohortWithSubmissions(db, 12);
   cohort = seeded.cohort;
   submissions = seeded.submissions;
-  assessment = buildAssessmentStore(db);
+  assessment = buildAssessmentStore(db, createInMemoryStorage());
   ranking = buildRankingStore(db);
 });
 

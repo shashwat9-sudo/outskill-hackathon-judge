@@ -39,9 +39,10 @@
     "**/*.tsx",
     ".next-acceptance/types/**/*.ts",
     ".next-uxreview/types/**/*.ts",
+    ".next-vercelcheck/types/**/*.ts",
     ".next/types/**/*.ts",
     "next-env.d.ts",
-    ".next-vercelcheck/types/**/*.ts"
+    ".next-check/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

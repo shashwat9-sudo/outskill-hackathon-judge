@@ -45,10 +45,14 @@ function store() {
  * copy. A method added to `AssessmentStore` tomorrow is covered by this test
  * the moment it is declared.
  */
-async function declaredMethods(interfaceName: string): Promise<string[]> {
-  const source = await readFile(resolve(HERE, '../store.ts'), 'utf8');
-  const start = source.indexOf(`export interface ${interfaceName} {`);
-  expect(start, `${interfaceName} should exist`).toBeGreaterThan(-1);
+async function declaredMethods(interfaceName: string, file = '../store.ts'): Promise<string[]> {
+  const source = await readFile(resolve(HERE, file), 'utf8');
+  // Tolerant of `extends`: `AssessmentStore` gained a base interface when
+  // evidence upload moved into its own file, and a lookup that assumed the
+  // declaration ended in `{` silently found nothing and reported zero methods.
+  const match = new RegExp(`export interface ${interfaceName}\\s*(?:extends [^{]+)?\\{`).exec(source);
+  expect(match, `${interfaceName} should exist`).not.toBeNull();
+  const start = match!.index;
   const block = source.slice(start, source.indexOf('\n}', start));
 
   // Method signatures at one level of indentation: `  name(` or `  name<T>(`.
@@ -56,12 +60,23 @@ async function declaredMethods(interfaceName: string): Promise<string[]> {
 }
 
 describe('the assessment repository', () => {
-  it('implements all 35 methods the interface declares', async () => {
-    const declared = await declaredMethods('AssessmentStore');
-    expect(declared).toHaveLength(35);
+  it('implements every method the interface declares, its own and inherited', async () => {
+    const own = await declaredMethods('AssessmentStore');
+    const inherited = await declaredMethods('EvidenceStore', './repositories/evidence.ts');
+
+    expect(own).toHaveLength(35);
+    // Evidence upload lives in its own file because it is the one part of the
+    // assessment surface that needs a Storage credential.
+    expect(inherited).toEqual([
+      'createEvidenceUploadTicket',
+      'confirmEvidenceUpload',
+      'getEvidenceObject',
+    ]);
 
     const implemented = store().assessment as unknown as Record<string, unknown>;
-    const missing = declared.filter((name) => typeof implemented[name] !== 'function');
+    const missing = [...own, ...inherited].filter(
+      (name) => typeof implemented[name] !== 'function',
+    );
 
     expect(missing, 'Methods declared but not implemented').toEqual([]);
   });

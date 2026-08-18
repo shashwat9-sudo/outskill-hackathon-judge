@@ -242,3 +242,38 @@ export class RowNotFoundError extends Error {
     super(`${entity} ${id} not found.`);
   }
 }
+
+/**
+ * Which role is this connection actually using, and does it bypass RLS?
+ *
+ * Asked at worker boot. The row-level security policies that keep judging away
+ * from the ranking tables, the admin account and everyone's access codes are
+ * simply not applied to a superuser — silently, with no error — so a deployment
+ * connected as `postgres` looks identical to a correctly restricted one right
+ * up until something goes wrong.
+ *
+ * Returns null when the question cannot be answered. A driver that will not
+ * report its own role is not itself evidence of a problem, and refusing to
+ * start over it would turn a diagnostic into an outage.
+ */
+export async function describeConnectionRole(
+  db: SqlDatabase,
+): Promise<{ role: string; bypassesRls: boolean } | null> {
+  try {
+    const { rows } = await db.query<{
+      role: string;
+      rolsuper: boolean;
+      rolbypassrls: boolean;
+    }>(
+      `select current_user as role,
+              coalesce(rolsuper, false) as rolsuper,
+              coalesce(rolbypassrls, false) as rolbypassrls
+         from pg_roles where rolname = current_user`,
+    );
+    const row = rows[0];
+    if (!row) return null;
+    return { role: row.role, bypassesRls: row.rolsuper || row.rolbypassrls };
+  } catch {
+    return null;
+  }
+}

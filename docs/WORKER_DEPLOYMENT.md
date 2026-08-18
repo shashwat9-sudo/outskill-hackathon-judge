@@ -247,3 +247,68 @@ anything. A restart clears the symptom and loses the reason.
 - No real learner cohort is judged. `AIAP C13 Demo` holds 640 real learners.
 - The system never declares a winner. Humans choose the final four, and every
   choice is recorded against the person who made it.
+
+---
+
+## The worker's database login
+
+The worker must not connect as `postgres`.
+
+Migration `0002_rls.sql` wrote a careful set of policies for `ohj_worker`: it
+reads submissions, writes assessment output, may read a product credential at
+the moment it uses one, and has no access at all to the ranking tables, because
+a machine does not choose winners (ADR-018). None of that was in force. The role
+was created `nologin`, so the worker connected as `postgres` instead — an owner
+and a superuser, which bypasses row-level security silently. Every policy was
+decoration.
+
+Migration `0006_worker_least_privilege.sql` narrows the grants to match the
+policies and makes the role usable. It deliberately contains no password: a
+password in a migration is a password in Git.
+
+**Once, per environment**, run as a database superuser:
+
+```sql
+alter role ohj_worker with login password '<generate one, store it in the password manager>';
+```
+
+Then set the worker's `DATABASE_URL` to connect as `ohj_worker` rather than
+`postgres`. On Railway this is an environment variable on the service; it is
+never committed, never printed, and never shared with the web app, which has its
+own connection.
+
+The worker checks at boot and **refuses to start** if its connection bypasses
+row-level security. That is deliberate: the failure it guards against is
+invisible at runtime, because everything works — that is the problem. For a
+local database that has never had the roles created, set
+`WORKER_ALLOW_SUPERUSER_DB=1`, which logs a warning naming the role.
+
+Verified by `packages/shared/src/data/postgres/worker-privileges.test.ts`, which
+tries each forbidden operation and asserts the refusal. Seven of its twelve
+tests fail if migration 0006 is removed.
+
+## Evidence uploads
+
+The worker holds no Supabase Storage credential, deliberately. It captures
+screenshots and traces to a local directory, asks the web app for permission to
+write one object, uploads to that one path, and asks the web app to confirm —
+and only the confirmation writes a path to the database. The web app checks with
+Storage before it records anything, so a row never claims evidence that is not
+in the bucket.
+
+Two environment variables enable it:
+
+- `WORKER_API_TOKEN` — a shared secret, at least 32 characters, set on **both**
+  Vercel and Railway with the same value. Compared in constant time. Never
+  logged, never placed in a URL, and never sent to the Storage host.
+- `APP_BASE_URL` — where the web app lives.
+
+Without them the worker still judges and simply records no evidence paths, which
+is honest; the alternative is writing down a local path that will not exist
+tomorrow.
+
+The local staging directory is emptied at boot — anything left behind belongs to
+a container that no longer exists — and each job's directory is removed once its
+uploads have been attempted. A local file is deleted only after the web app
+confirms the object is really in the bucket. A failed upload keeps its bytes and
+logs the reason; evidence we still have is worth more than a tidy directory.

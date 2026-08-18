@@ -671,7 +671,22 @@ function EvidenceTab({ detail }: { detail: AdminSubmissionDetail }) {
                   <Td className="text-muted">
                     {String((step.assertionDetail as { detail?: string }).detail ?? '')}
                     {step.screenshotPath && (
-                      <span className="ml-2 font-mono text-xs text-info">📷 {step.screenshotPath}</span>
+                      /*
+                       * A link, not the path.
+                       *
+                       * The path was printed here before and could not be
+                       * opened, which asked a reviewer to trust a score with
+                       * the evidence sitting just out of reach. The href names
+                       * the step; the server decides which object that is.
+                       */
+                      <a
+                        href={`/api/admin/evidence/screenshot/${step.id}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="ml-2 text-xs text-brand-text underline"
+                      >
+                        📷 View screenshot
+                      </a>
                     )}
                   </Td>
                 </tr>
@@ -680,7 +695,15 @@ function EvidenceTab({ detail }: { detail: AdminSubmissionDetail }) {
           </Table>
 
           {run.tracePath && (
-            <p className="mt-3 font-mono text-xs text-muted">Trace: {run.tracePath}</p>
+            <p className="mt-3 text-xs text-muted">
+              Trace:{' '}
+              <a
+                href={`/api/admin/evidence/trace/${run.id}?download=1`}
+                className="text-brand-text underline"
+              >
+                Download the Playwright trace
+              </a>
+            </p>
           )}
         </Card>
       ))}

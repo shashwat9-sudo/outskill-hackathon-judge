@@ -7,7 +7,7 @@
  * a human is an outcome, not an error.
  */
 
-import { mkdir } from 'node:fs/promises';
+import { mkdir, rm } from 'node:fs/promises';
 import {
   RUBRIC_CATEGORIES,
   anonymiseSubmissionId,
@@ -47,6 +47,7 @@ import {
 import { runPreflight } from './preflight';
 import { extractPdfText } from './pdf';
 import { runBrowserPlan, summariseRun, type BrowserRunResult } from './browser-runner';
+import type { EvidenceUploader } from './evidence-upload';
 
 /**
  * Every personal name the system already holds for a submission.
@@ -69,6 +70,13 @@ export interface StageContext {
   env: Env;
   workerId: string;
   evidenceRoot: string;
+  /**
+   * How captured evidence becomes durable.
+   *
+   * Absent in unit tests and in demo mode, where nothing is uploaded and the
+   * database simply records no evidence — which is honest. Never a local path.
+   */
+  evidence?: EvidenceUploader;
   log: Logger;
   /**
    * Only the controlled judging run sets this, to reach a fixture served from
@@ -452,6 +460,20 @@ async function browserTestingStage(job: AssessmentJob, ctx: StageContext): Promi
    *
    * So this is checked where the browser actually ran.
    */
+  /*
+   * The staging directory has served its purpose.
+   *
+   * Both runs have been persisted and their uploads attempted, including the
+   * bounded retries. Anything still here failed to upload and there is no
+   * out-of-process retry that will ever read it again, so keeping it would just
+   * accumulate — 400 submissions with 50 MB traces fills a container disk long
+   * before the queue drains. The failures were logged with the reason at the
+   * point they happened; the bytes add nothing.
+   */
+  await rm(`${ctx.evidenceRoot}/${job.submissionId}`, { recursive: true, force: true }).catch(
+    () => {},
+  );
+
   const outcome = classifyBrowserOutcome(desktop, mobile);
 
   if (outcome.nextStage === 'manual_review') {
@@ -534,6 +556,14 @@ export function classifyBrowserOutcome(
   };
 }
 
+/**
+ * Write the run down, then make its evidence durable.
+ *
+ * The paths saved here are null on purpose. The worker's local paths are not
+ * evidence — they name files inside a container that is about to be replaced —
+ * and a column that holds one is a row claiming something that is not there.
+ * The real path is written by the confirmation, or not at all.
+ */
 async function persistRun(jobId: string, run: BrowserRunResult, ctx: StageContext): Promise<void> {
   const a11y = run.observations.a11yViolations;
   await ctx.store.assessment.saveBrowserRun(
@@ -545,7 +575,7 @@ async function persistRun(jobId: string, run: BrowserRunResult, ctx: StageContex
       durationMs: run.durationMs,
       status: run.status,
       browserVersion: run.browserVersion,
-      tracePath: run.tracePath,
+      tracePath: null,
       consoleErrorCount: run.observations.consoleErrors.length,
       networkFailureCount: run.observations.networkFailures.length,
       a11yViolationCount: a11y.length,
@@ -563,11 +593,74 @@ async function persistRun(jobId: string, run: BrowserRunResult, ctx: StageContex
       action: step.action,
       status: step.status,
       durationMs: step.durationMs,
-      screenshotPath: step.screenshotPath,
+      screenshotPath: null,
       assertionDetail: { detail: step.detail },
       errorMessage: step.errorMessage,
     })),
   );
+
+  await uploadRunEvidence(jobId, run, ctx);
+}
+
+/**
+ * Move this run's captured files into Storage.
+ *
+ * Best effort by design. A failed upload leaves the local file in place and the
+ * database saying there is no evidence, which is true and is the safe way to be
+ * wrong. Judging continues either way: a missing screenshot is a weaker record,
+ * not a reason to fail a learner's submission.
+ */
+async function uploadRunEvidence(
+  jobId: string,
+  run: BrowserRunResult,
+  ctx: StageContext,
+): Promise<void> {
+  if (!ctx.evidence) return;
+
+  // The ids the database assigned, which are what evidence is attached to.
+  const saved = (await ctx.store.assessment.listBrowserRuns(jobId)).find(
+    (r) => r.viewport === run.viewport,
+  );
+  if (!saved) return;
+
+  if (run.tracePath) {
+    const result = await ctx.evidence.upload({
+      jobId,
+      kind: 'trace',
+      localPath: run.tracePath,
+      runId: saved.id,
+    });
+    if (!result.ok) {
+      ctx.log.warn('evidence.trace_not_stored', {
+        jobId,
+        viewport: run.viewport,
+        reason: result.reason,
+        retainedLocally: result.retained,
+      });
+    }
+  }
+
+  for (const step of run.steps) {
+    if (!step.screenshotPath) continue;
+    const savedStep = saved.steps.find((s) => s.stepIndex === step.stepIndex);
+    if (!savedStep) continue;
+
+    const result = await ctx.evidence.upload({
+      jobId,
+      kind: 'screenshot',
+      localPath: step.screenshotPath,
+      stepId: savedStep.id,
+    });
+    if (!result.ok) {
+      ctx.log.warn('evidence.screenshot_not_stored', {
+        jobId,
+        viewport: run.viewport,
+        stepIndex: step.stepIndex,
+        reason: result.reason,
+        retainedLocally: result.retained,
+      });
+    }
+  }
 }
 
 // --------------------------------------------------------------------------

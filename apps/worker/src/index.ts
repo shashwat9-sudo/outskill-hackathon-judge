@@ -9,17 +9,21 @@
  * app's memory, session secrets, or request context.
  */
 
-import { mkdir } from 'node:fs/promises';
+import { mkdir, rm } from 'node:fs/promises';
 import {
   MemoryDataStore,
   Logger,
   createPostgresDataStore,
+  createPostgresDatabase,
+  describeConnectionRole,
   loadEnv,
   type AssessmentStage,
   type DataStore,
+  type SqlDatabase,
 } from '@ohj/shared';
 import { createAiClientFromEnv } from '@ohj/ai';
 import { runStage, type StageContext } from './pipeline';
+import { createEvidenceUploader } from './evidence-upload';
 import { stalenessLimitMs, startHealthServer, type WorkerHeartbeat } from './health';
 
 const log = new Logger({ name: 'worker' });
@@ -57,6 +61,29 @@ async function connectProductionStore(env: ReturnType<typeof loadEnv>): Promise<
     );
   }
 
+  /*
+   * Who are we connected as?
+   *
+   * Asked before anything else is built. The policies in migration 0002
+   * describe a worker that reads submissions, writes assessment output, and
+   * cannot see the ranking tables — and none of them apply to a superuser,
+   * which bypasses row-level security silently. A worker connected as
+   * `postgres` has the whole database while looking correctly restricted, which
+   * was the real configuration until migration 0006.
+   *
+   * One short-lived connection, closed immediately. The answer cannot change
+   * while the process runs.
+   */
+  const probe = await createPostgresDatabase({
+    connectionString: env.DATABASE_URL,
+    maxConnections: 1,
+  });
+  try {
+    await assertNotSuperuser(probe);
+  } finally {
+    await probe.close();
+  }
+
   const store = await createPostgresDataStore({
     databaseUrl: env.DATABASE_URL,
     // Unused by the worker, but the store requires them to compose. They are
@@ -81,6 +108,37 @@ async function connectProductionStore(env: ReturnType<typeof loadEnv>): Promise<
   return store;
 }
 
+/**
+ * Refuse to judge as a superuser.
+ *
+ * A warning would be the wrong shape: the whole point of the least-privilege
+ * role is that a mistake in the worker cannot reach beyond judging, and a
+ * deployment that quietly kept superuser access would have exactly the property
+ * we set out to remove. `WORKER_ALLOW_SUPERUSER_DB=1` exists for a local
+ * database that has never had the roles created, and says so in the log.
+ */
+async function assertNotSuperuser(db: SqlDatabase): Promise<void> {
+  const role = await describeConnectionRole(db);
+  if (!role || !role.bypassesRls) return;
+
+  if (process.env.WORKER_ALLOW_SUPERUSER_DB === '1') {
+    log.warn('Connected to the database as a privileged role', {
+      role: role.role,
+      effect: 'Row-level security is not enforced for this connection.',
+      allowedBy: 'WORKER_ALLOW_SUPERUSER_DB=1',
+    });
+    return;
+  }
+
+  throw new Error(
+    `The worker is connected as "${role.role}", which bypasses row-level security. ` +
+      'Judging must run as the least-privilege role. Create the login once with ' +
+      "`alter role ohj_worker with login password '<from your password manager>'` and point " +
+      "the worker's DATABASE_URL at it. See docs/WORKER_DEPLOYMENT.md. " +
+      'Set WORKER_ALLOW_SUPERUSER_DB=1 to override on a local database.',
+  );
+}
+
 async function main(): Promise<void> {
   const env = loadEnv();
   const workerId = env.WORKER_ID || `worker-${process.pid}`;
@@ -90,8 +148,42 @@ async function main(): Promise<void> {
     : await connectProductionStore(env);
   const ai = createAiClientFromEnv(env);
 
+  /*
+   * The staging area for captured evidence, and only that.
+   *
+   * Nothing durable lives here. Screenshots and traces land in this directory,
+   * get uploaded, and are deleted once the web app confirms the object is in
+   * the bucket. It is emptied at boot because anything left behind belongs to a
+   * previous container: either it was already uploaded, or its job has long
+   * since been retried by another worker, and in both cases the bytes are
+   * orphans that would otherwise accumulate until the disk filled.
+   */
   const evidenceRoot = `${process.cwd()}/.local-evidence`;
+  await rm(evidenceRoot, { recursive: true, force: true }).catch(() => {});
   await mkdir(evidenceRoot, { recursive: true });
+
+  /*
+   * How evidence becomes durable — or, in demo mode, does not.
+   *
+   * Requires both a token and a base URL. Without them the worker still judges
+   * and simply records no evidence paths, which is honest: the alternative is
+   * writing down a local path that will not exist tomorrow.
+   */
+  const evidence =
+    !env.DEMO_MODE && env.WORKER_API_TOKEN && env.APP_BASE_URL
+      ? createEvidenceUploader({
+          baseUrl: env.APP_BASE_URL,
+          token: env.WORKER_API_TOKEN,
+          workerId,
+        })
+      : undefined;
+
+  if (!env.DEMO_MODE && !evidence) {
+    log.warn('Evidence uploads are disabled', {
+      reason: 'WORKER_API_TOKEN or APP_BASE_URL is not set',
+      effect: 'Browser runs will be judged and recorded with no screenshot or trace paths.',
+    });
+  }
 
   log.info('Worker started', {
     workerId,
@@ -159,6 +251,7 @@ async function main(): Promise<void> {
             env,
             workerId,
             evidenceRoot,
+            evidence,
             log: log.child(job.id.slice(0, 8)),
           };
 

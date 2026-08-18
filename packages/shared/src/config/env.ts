@@ -87,6 +87,15 @@ export const envSchema = z.object({
    */
   AI_EVALUATION_MODE: z.enum(['synthetic_only', 'production']).default('synthetic_only'),
 
+  /**
+   * Shared secret authenticating the judging worker to the web app.
+   *
+   * The worker holds no Storage credential, so it asks the web app to mint one
+   * upload authorisation at a time. This token proves the caller is our worker.
+   * It is deliberately not enough on its own: every request is also checked
+   * against the job it names, and every path is derived server-side.
+   */
+  WORKER_API_TOKEN: z.string().optional(),
   WORKER_ID: z.string().optional(),
   /** Where the worker serves /healthz and /readyz. Container-internal only. */
   WORKER_HEALTH_PORT: positiveInt(8080),

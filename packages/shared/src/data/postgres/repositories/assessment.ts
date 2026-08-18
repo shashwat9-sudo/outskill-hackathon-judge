@@ -13,14 +13,20 @@
 
 import type { AssessmentStore } from '../../store';
 import type { SqlDatabase } from '../client';
+import type { StorageAdapter } from '../storage';
+import { buildEvidenceStore } from './evidence';
 import { buildQueueMethods } from './assessment-queue';
 import { buildPipelineMethods } from './assessment-pipeline';
 import { buildJudgmentMethods } from './assessment-judgment';
 
-export function buildAssessmentStore(db: SqlDatabase): AssessmentStore {
+export function buildAssessmentStore(db: SqlDatabase, storage: StorageAdapter): AssessmentStore {
   return {
     ...buildQueueMethods(db),
     ...buildPipelineMethods(db),
     ...buildJudgmentMethods(db),
+    // Evidence needs a Storage credential to mint an upload URL, which is why
+    // it lives on the web app's store and why the worker asks over HTTP rather
+    // than doing it itself.
+    ...buildEvidenceStore(db, storage),
   };
 }

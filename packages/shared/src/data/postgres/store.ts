@@ -94,7 +94,7 @@ export function composePostgresDataStore(
     audit: buildAuditStore(db),
     settings: buildSettingsStore(db),
 
-    assessment: buildAssessmentStore(db),
+    assessment: buildAssessmentStore(db, storage),
     ranking: buildRankingStore(db),
 
     // Both repositories are implemented against this schema and exercised by

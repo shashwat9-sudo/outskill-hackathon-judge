@@ -36,6 +36,13 @@ import {
   validateReopen,
 } from '../../domain/submission-window';
 import { checkVersion } from '../../domain/concurrency';
+import {
+  EVIDENCE_BUCKETS,
+  EVIDENCE_MAX_BYTES,
+  EVIDENCE_UPLOAD_TTL_SECONDS,
+  evidencePathBelongsTo,
+  evidenceTarget,
+} from '../../domain/evidence-path';
 import { MAX_DECK_BYTES, looksLikePdf, validateDeckUpload } from '../../schemas/submission';
 import { assessCohortDeletion, confirmationMatches } from '../../domain/cohort-deletion';
 import {
@@ -259,6 +266,8 @@ export class MemoryDataStore implements DataStore {
 
   /** Deck bytes uploaded during a demo run. Never persisted anywhere. */
   private readonly demoDeckBytes = new Map<string, Uint8Array>();
+  /** Evidence objects, keyed `<bucket>/<path>` exactly as production keys them. */
+  private readonly demoEvidenceBytes = new Map<string, Uint8Array>();
 
   private buildParticipantStore(): ParticipantStore {
     const db = () => this.db;
@@ -2011,6 +2020,124 @@ export class MemoryDataStore implements DataStore {
           this.db.submissions.filter((s) => s.cohortId === cohortId).map((s) => s.id),
         );
         return clone(this.db.disqualifications.filter((d) => submissionIds.has(d.submissionId)));
+      },
+
+      /*
+       * Demo mode holds evidence in memory, and still refuses to record it
+       * before it exists.
+       *
+       * The shape is identical to production on purpose: ticket, upload,
+       * confirm-with-verification. A demo that recorded evidence optimistically
+       * would show a success the real path would refuse.
+       */
+      createEvidenceUploadTicket: async ({ jobId, kind, filename, workerId }) => {
+        await this.ready;
+        const job = this.db.jobs.find((j: AssessmentJob) => j.id === jobId);
+        if (!job) return { ok: false, error: 'Unknown job.' };
+
+        const submission = this.db.submissions.find((s) => s.id === job.submissionId);
+        if (!submission || submission.cohortId !== job.cohortId) {
+          return { ok: false, error: 'Unknown job.' };
+        }
+
+        // Same rule as production: a new authorisation needs a live lease this
+        // worker owns.
+        const live = job.claimedBy === workerId && job.leaseExpiresAt && job.leaseExpiresAt > new Date();
+        if (!live) {
+          return { ok: false, error: 'This worker does not hold a live lease on that job.' };
+        }
+
+        let target;
+        try {
+          target = evidenceTarget(
+            { cohortId: job.cohortId, submissionId: job.submissionId, jobId: job.id },
+            kind,
+            filename,
+          );
+        } catch {
+          return { ok: false, error: 'Could not derive an evidence path for this job.' };
+        }
+
+        return {
+          ok: true,
+          uploadUrl: `/api/demo-upload/${encodeURIComponent(target.bucket)}/${encodeURIComponent(target.storagePath)}`,
+          bucket: target.bucket,
+          storagePath: target.storagePath,
+          maxBytes: EVIDENCE_MAX_BYTES[kind],
+          expiresInSeconds: EVIDENCE_UPLOAD_TTL_SECONDS,
+          attempt: job.attemptCount,
+        };
+      },
+
+      confirmEvidenceUpload: async ({ jobId, kind, bucket, storagePath, workerId, attempt, runId, stepId }) => {
+        await this.ready;
+        const job = this.db.jobs.find((j: AssessmentJob) => j.id === jobId);
+        if (!job) return { ok: false, error: 'Unknown job.' };
+
+        // An expired lease may still finish its upload; a superseded attempt
+        // may not.
+        if (job.attemptCount !== attempt) {
+          return {
+            ok: false,
+            error: `This upload belongs to attempt ${attempt}; the job is now on attempt ${job.attemptCount}.`,
+          };
+        }
+
+        if (job.claimedBy && job.claimedBy !== workerId && job.leaseExpiresAt && job.leaseExpiresAt > new Date()) {
+          return { ok: false, error: 'This job is now leased by another worker.' };
+        }
+
+        const owner = { cohortId: job.cohortId, submissionId: job.submissionId, jobId: job.id };
+        if (!evidencePathBelongsTo(storagePath, bucket, owner, kind)) {
+          return { ok: false, error: 'That evidence path does not belong to this job.' };
+        }
+
+        const bytes = this.demoEvidenceBytes.get(`${bucket}/${storagePath}`);
+        if (!bytes) {
+          return { ok: false, error: 'The upload did not finish. Nothing has been recorded.' };
+        }
+
+        let alreadyRecorded = false;
+        if (kind === 'trace' && runId) {
+          const run = this.db.browserRuns.find((r) => r.id === runId && r.jobId === jobId);
+          if (!run) return { ok: false, error: 'That browser run does not belong to this job.' };
+          alreadyRecorded = run.tracePath === storagePath;
+          run.tracePath = storagePath;
+        } else if (kind === 'screenshot' && stepId) {
+          const step = this.db.browserSteps.find((s) => s.id === stepId);
+          const run = step ? this.db.browserRuns.find((r) => r.id === step.runId && r.jobId === jobId) : null;
+          if (!step || !run) return { ok: false, error: 'That step does not belong to this job.' };
+          alreadyRecorded = step.screenshotPath === storagePath;
+          step.screenshotPath = storagePath;
+        }
+
+        return { ok: true, bucket, storagePath, byteSize: bytes.byteLength, alreadyRecorded };
+      },
+
+      getEvidenceObject: async ({ kind, id }) => {
+        await this.ready;
+        const run =
+          kind === 'trace'
+            ? this.db.browserRuns.find((r) => r.id === id)
+            : (() => {
+                const step = this.db.browserSteps.find((s) => s.id === id);
+                return step ? this.db.browserRuns.find((r) => r.id === step.runId) : undefined;
+              })();
+        if (!run) return null;
+
+        const path =
+          kind === 'trace'
+            ? run.tracePath
+            : (this.db.browserSteps.find((s) => s.id === id)?.screenshotPath ?? null);
+        if (!path) return null;
+
+        const job = this.db.jobs.find((j: AssessmentJob) => j.id === run.jobId);
+        if (!job) return null;
+
+        const owner = { cohortId: job.cohortId, submissionId: job.submissionId, jobId: job.id };
+        const bucket = EVIDENCE_BUCKETS[kind];
+        if (!evidencePathBelongsTo(path, bucket, owner, kind)) return null;
+        return { bucket, storagePath: path, ...owner };
       },
 
       getQueueStats: async (cohortId) => this.computeQueueStats(cohortId),

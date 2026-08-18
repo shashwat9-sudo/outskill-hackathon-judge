@@ -1,3 +1,4 @@
+import { createInMemoryStorage } from './storage';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
@@ -113,7 +114,7 @@ describeIfServer('two workers claiming at the same instant', () => {
     );
 
     const { cohort } = await seedCohortWithSubmissions(store, JOBS);
-    const assessment = buildAssessmentStore(store);
+    const assessment = buildAssessmentStore(store, createInMemoryStorage());
     await assessment.enqueueCohort(cohort.id);
 
     // Every worker issues its claim without waiting for the others. This is the
@@ -142,7 +143,7 @@ describeIfServer('two workers claiming at the same instant', () => {
     const store = db!;
     await store.query('truncate cohorts restart identity cascade');
     const { cohort } = await seedCohortWithSubmissions(store, JOBS, { code: 'RACE2' });
-    const assessment = buildAssessmentStore(store);
+    const assessment = buildAssessmentStore(store, createInMemoryStorage());
     await assessment.enqueueCohort(cohort.id);
 
     const claims = await Promise.all(
@@ -171,7 +172,7 @@ describeIfServer('two workers claiming at the same instant', () => {
     const store = db!;
     await store.query('truncate cohorts restart identity cascade');
     const { cohort } = await seedCohortWithSubmissions(store, 5, { code: 'RACE3' });
-    const assessment = buildAssessmentStore(store);
+    const assessment = buildAssessmentStore(store, createInMemoryStorage());
     await assessment.enqueueCohort(cohort.id);
 
     await Promise.all(
@@ -188,7 +189,7 @@ describeIfServer('two workers claiming at the same instant', () => {
     const store = db!;
     await store.query('truncate cohorts restart identity cascade');
     const { cohort } = await seedCohortWithSubmissions(store, 1, { code: 'RACE4' });
-    const assessment = buildAssessmentStore(store);
+    const assessment = buildAssessmentStore(store, createInMemoryStorage());
     await assessment.enqueueCohort(cohort.id);
 
     await assessment.claimJobs({ workerId: 'holder', limit: 1, leaseSeconds: 120 });
