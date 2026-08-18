@@ -211,4 +211,56 @@ describeIfServer('two workers claiming at the same instant', () => {
     // Exactly one of them takes it — not none, and not several.
     expect(after.flat()).toHaveLength(1);
   }, 120_000);
+
+  it('let the owner walk its job through every stage while eight rivals tried to take it', async () => {
+    /*
+     * The stage-progression fix, proved on real connections.
+     *
+     * A worker runs one stage per claim and keeps ownership between stages, so
+     * it must be able to re-claim its own live lease — otherwise a job advances
+     * once and then waits out JOB_LEASE_SECONDS, which at the default is one
+     * stage every fifteen minutes.
+     *
+     * The danger in allowing that is obvious, so it is tested here rather than
+     * argued: on every single stage, eight other workers poll at the same
+     * moment. None of them may ever come away with the job.
+     */
+    const store = db!;
+    await store.query('truncate cohorts restart identity cascade');
+    const { cohort } = await seedCohortWithSubmissions(store, 1, { code: 'RACE5' });
+    const assessment = buildAssessmentStore(store, createInMemoryStorage());
+    await assessment.enqueueCohort(cohort.id);
+
+    const [mine] = await assessment.claimJobs({ workerId: 'owner', limit: 1, leaseSeconds: 900 });
+    expect(mine).toBeDefined();
+    const jobId = mine!.id;
+
+    const stages = [
+      'preflight', 'artifact_analysis', 'test_plan_generation', 'browser_testing',
+      'evidence_review', 'scoring', 'consistency_review', 'completed',
+    ] as const;
+
+    for (const next of stages) {
+      const [owner, ...rivals] = await Promise.all([
+        assessment.claimJobs({ workerId: 'owner', limit: 1, leaseSeconds: 900 }),
+        ...Array.from({ length: WORKERS }, (_, i) =>
+          assessment.claimJobs({ workerId: `rival${i}`, limit: 1, leaseSeconds: 900 }),
+        ),
+      ]);
+
+      expect(owner, `owner could not continue into ${next}`).toHaveLength(1);
+      expect(rivals.flat(), `a rival stole the job before ${next}`).toEqual([]);
+
+      await assessment.advanceStage(jobId, next, null);
+    }
+
+    const { rows } = await store.query<{
+      stage: string; claimed_by: string | null; attempt_count: number;
+    }>('select stage, claimed_by, attempt_count from assessment_jobs where id = $1', [jobId]);
+
+    expect(rows[0]!.stage).toBe('completed');
+    // Ownership released at the end, and eight stages cost exactly one attempt.
+    expect(rows[0]!.claimed_by).toBeNull();
+    expect(rows[0]!.attempt_count).toBe(1);
+  }, 120_000);
 });

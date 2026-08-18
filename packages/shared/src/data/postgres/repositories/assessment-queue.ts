@@ -152,6 +152,26 @@ export function buildQueueMethods(db: SqlDatabase): QueueMethods {
      *
      * The lease is set here rather than by the worker, so a worker cannot grant
      * itself an unbounded one.
+     *
+     * A worker may also re-claim a job it already holds, and this is not a
+     * detail — it is what lets a job move.
+     *
+     * The loop runs one stage per claim and `advanceStage` deliberately keeps
+     * ownership between stages, so that nobody else picks up a job that is
+     * halfway through. Without the clause below, the owning worker could not
+     * see its own job either: the predicate excluded everything with a live
+     * lease, so a job advanced one stage and then sat until the lease expired.
+     * At the default 900s that is one stage every fifteen minutes — around two
+     * hours per submission, which for a 500-submission cohort is not a slow
+     * system but a stalled one.
+     *
+     * Continuing is not a new attempt, so `attempt_count` does not move. That
+     * matters in three places: the claim filter would otherwise exhaust
+     * `max_attempts` after a few stages and strand a healthy job; the retry
+     * backoff would count stages as failures; and evidence upload tickets are
+     * bound to an attempt, so an in-flight upload would be refused the moment
+     * its job stepped forward. Only a genuinely fresh claim — unowned, or a
+     * lease that has expired — counts as an attempt.
      */
     async claimJobs(input) {
       const leaseSeconds = Math.max(1, Math.floor(input.leaseSeconds));
@@ -165,7 +185,12 @@ export function buildQueueMethods(db: SqlDatabase): QueueMethods {
                 lease_expires_at = now() + make_interval(secs => $2::double precision),
                 heartbeat_at = now(),
                 started_at = coalesce(j.started_at, now()),
-                attempt_count = j.attempt_count + 1,
+                -- Zero when this worker is continuing a job it already owns.
+                -- The j alias is the pre-update row, so this reads the state
+                -- that decided whether the row was claimable in the first place.
+                attempt_count = j.attempt_count + (
+                  case when j.claimed_by = $1 and j.lease_expires_at > now() then 0 else 1 end
+                ),
                 updated_at = now()
           where j.id in (
             select c.id
@@ -175,10 +200,20 @@ export function buildQueueMethods(db: SqlDatabase): QueueMethods {
              -- enum array, and this form is identical to Postgres. Verified to
              -- still use assessment_jobs_claim via an index scan.
              where c.stage = any($3::text[]::assessment_stage[])
-               and (c.claimed_by is null or c.lease_expires_at < now())
+               and (
+                 c.claimed_by is null
+                 or c.lease_expires_at < now()
+                 -- Mine already, and still live: continue it.
+                 or (c.claimed_by = $1 and c.lease_expires_at > now())
+               )
                and (c.next_attempt_at is null or c.next_attempt_at <= now())
                and c.attempt_count < c.max_attempts
-             order by c.priority desc, c.next_attempt_at nulls first, c.created_at
+             -- Finish what this worker started before taking anything new.
+             -- Otherwise a worker at concurrency 1 could pick up a fresh job
+             -- and leave its own half-done one leased and idle until expiry —
+             -- the same stall, arrived at differently.
+             order by (case when c.claimed_by = $1 then 0 else 1 end),
+                      c.priority desc, c.next_attempt_at nulls first, c.created_at
              limit $4
              for update skip locked
           )
@@ -191,7 +226,14 @@ export function buildQueueMethods(db: SqlDatabase): QueueMethods {
           -- somehow selected the same row, the second sees claimed_by already
           -- set and updates nothing. The invariant then holds without depending
           -- on the subquery locking behaviour alone.
-          and (j.claimed_by is null or j.lease_expires_at < now())
+          -- The continuation case is re-checked too: another worker cannot
+          -- satisfy claimed_by = its own id, so this stays a statement about
+          -- one worker resuming its own work.
+          and (
+            j.claimed_by is null
+            or j.lease_expires_at < now()
+            or (j.claimed_by = $1 and j.lease_expires_at > now())
+          )
         returning j.*`,
         [input.workerId, leaseSeconds, [...CLAIMABLE_STAGES], limit],
       );
