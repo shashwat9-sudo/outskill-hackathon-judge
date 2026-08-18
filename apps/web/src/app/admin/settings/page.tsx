@@ -1,4 +1,4 @@
-import { getEnvConfig, getStore, isDemo } from '@/lib/store';
+import { getEnvConfig, getStoreAsync, isDemo } from '@/lib/store';
 import { requireAdmin } from '@/server/admin-auth';
 import {
   rotateCredentialsAction,
@@ -31,7 +31,7 @@ export const dynamic = 'force-dynamic';
  */
 export default async function SettingsPage() {
   const session = await requireAdmin();
-  const store = getStore();
+  const store = await getStoreAsync();
   const env = getEnvConfig();
   const settings = await store.settings.getAll();
   const cohorts = await store.cohorts.listCohorts();

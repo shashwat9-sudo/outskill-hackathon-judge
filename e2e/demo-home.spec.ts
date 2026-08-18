@@ -72,7 +72,10 @@ test.describe('demo home', () => {
       expect(href).toMatch(/^\/submit\/[A-Za-z0-9_-]{20,}$/);
       const response = await page.goto(href as string);
       expect(response?.status(), `${href} did not load`).toBe(200);
+      // The invite page names the team it is about to open, before anyone
+      // commits to it.
       await expect(page.getByText(/^Group \d+$/).first()).toBeVisible();
+      await expect(page.getByTestId('invite-entry-form')).toBeVisible();
     }
   });
 

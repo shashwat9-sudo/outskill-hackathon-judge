@@ -95,7 +95,7 @@ export function CreateCohortFlow({ csrfToken }: { csrfToken: string }) {
                       : 'border-line bg-canvas text-muted',
                 )}
               >
-                <span aria-hidden="true" className={cn('mr-2', index < step && 'text-brand')}>
+                <span aria-hidden="true" className={cn('mr-2', index < step && 'text-brand-text')}>
                   {index < step ? '✓' : index + 1}
                 </span>
                 {label}

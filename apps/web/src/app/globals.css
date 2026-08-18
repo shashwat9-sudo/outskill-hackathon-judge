@@ -1,76 +1,147 @@
 @import 'tailwindcss';
 
 /* ==========================================================================
-   Outskill design tokens
+   Outskill colour tokens
    --------------------------------------------------------------------------
-   ONE PLACE. Every colour in the product resolves through these variables, so
-   replacing the temporary lime with the official Outskill green is a change to
-   `--brand-accent` and `--brand-accent-hover` below and nothing else.
+   ONE PLACE. Every colour in the product resolves through these variables.
+   Values are taken verbatim from DESIGN-SYSTEM.md so this portal and the main
+   Outskill site are the same product to look at.
 
-   The exact brand green has NOT been confirmed. These are documented
-   placeholders, not declared brand values. See docs/BRANDING.md.
+   Two layers, deliberately:
+
+     1. The design-system tokens, named exactly as the document names them, so
+        a value can be checked against the source without translation.
+     2. A mapping onto the semantic utility names this codebase already uses
+        (bg-surface, text-muted, border-line). Markup keeps reading by role
+        rather than by colour, and nothing outside this file changed.
+
+   Light mode is defined but has no toggle here. The host site sets
+   `data-theme="light"` on <html>; until it does, dark is what renders.
    ========================================================================== */
 
 :root {
-  /* --- Placeholder brand palette (swap these two for the official green) --- */
-  --brand-accent: #c8ff38;
-  --brand-accent-hover: #b7ee2f;
+  /* --- Brand accent. Identical in both themes, except as text. --- */
+  --accent: #ff5e3a;
+  --accent-hover: #ff7a5e;
+  --accent-pressed: #e54a28;
+  /* Orange used AS TEXT. Darkens in light mode to hold WCAG AA. */
+  --accent-text: #ff5e3a;
+  --accent-soft: rgba(255, 94, 58, 0.12);
+  --accent-glow: rgba(255, 94, 58, 0.4);
+  /* Ink on an orange fill. Never white: 6.4:1 against the accent. */
+  --accent-ink: #1a0a00;
 
-  /* --- Surfaces: near-black page, charcoal and dark-green raised planes --- */
-  --brand-background: #060806;
-  --brand-surface: #10140e;
-  --brand-surface-raised: #161c13;
-  --brand-surface-soft: #1d2419;
+  /* --- Neutrals --- */
+  --bg: #0a0a0b;
+  --bg-elevated: #111114;
+  --bg-card: #141418;
+  --bg-inset: #0c0c0e;
+  --border-subtle: #1c1c20;
+  --border: #26262c;
+  --border-strong: #3a3a42;
+  --text: #fafafa;
+  --text-secondary: #a1a1a8;
+  --text-muted: #83838d;
+  --text-dim: #56565f;
 
-  /* --- Text --- */
-  --brand-text: #f4f7f1;
-  --brand-text-muted: #9fa89a;
+  /* --- Semantic state --- */
+  --success: #4ade80;
+  --success-soft: rgba(74, 222, 128, 0.12);
+  --danger: #f87171;
+  --danger-soft: rgba(248, 113, 113, 0.12);
+  --info: #60a5fa;
+  --info-soft: rgba(96, 165, 250, 0.1);
 
-  /* --- Lines and status --- */
-  --brand-border: #2a3326;
-  --brand-danger: #ff6262;
-  --brand-warning: #f3bd52;
-  --brand-success: #77dd77;
+  /*
+   * Warning has no token in the design system, and this product needs one.
+   *
+   * "Two things missing" is not an error and not a success — the six-step
+   * progress, the review checklist and the deadline-drift notice all depend on
+   * a third state. Folding it into danger would tell a learner their draft is
+   * broken when it is merely unfinished.
+   *
+   * Left at the amber this product already used, which sits clear of the
+   * accent in hue (40 degrees against 13) so the two do not read as one. Every
+   * warning also carries a text label and a mark, so the colour is never
+   * carrying the meaning by itself.
+   */
+  --warning: #f3bd52;
+  --warning-soft: rgba(243, 189, 82, 0.12);
 
-  /* Derived: accent at low opacity, for tints and glows. */
-  --brand-accent-tint: color-mix(in srgb, var(--brand-accent) 14%, transparent);
-  --brand-accent-edge: color-mix(in srgb, var(--brand-accent) 38%, transparent);
-  --brand-danger-tint: color-mix(in srgb, var(--brand-danger) 14%, transparent);
-  --brand-warning-tint: color-mix(in srgb, var(--brand-warning) 14%, transparent);
-  --brand-success-tint: color-mix(in srgb, var(--brand-success) 14%, transparent);
-
-  /* Blue is reserved for links and technical information only — never for a
-     primary action, and never as a default UI state. */
-  --brand-link: #7fc4ff;
-  --brand-link-tint: color-mix(in srgb, var(--brand-link) 12%, transparent);
+  --shadow-colour: rgba(0, 0, 0, 0.4);
 }
 
-/* Tailwind utility mapping. Semantic names, so markup reads by role rather
-   than by colour: bg-surface, text-muted, border-line, bg-brand. */
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --accent-text: #c9391a;
+  --accent-soft: rgba(255, 94, 58, 0.1);
+  --accent-glow: rgba(255, 94, 58, 0.3);
+
+  --bg: #fafafa;
+  --bg-elevated: #ffffff;
+  --bg-card: #ffffff;
+  --bg-inset: #f4f4f5;
+  --border-subtle: #ebebee;
+  --border: #e4e4e7;
+  --border-strong: #d4d4d8;
+  --text: #18181b;
+  --text-secondary: #52525b;
+  --text-muted: #63636b;
+  --text-dim: #97979f;
+
+  --success: #15803d;
+  --success-soft: rgba(22, 163, 74, 0.1);
+  --danger: #dc2626;
+  --danger-soft: rgba(220, 38, 38, 0.08);
+  --info: #2563eb;
+  --info-soft: rgba(37, 99, 235, 0.08);
+
+  --warning: #b45309;
+  --warning-soft: rgba(180, 83, 9, 0.1);
+
+  --shadow-colour: rgba(0, 0, 0, 0.08);
+}
+
+/* Tailwind utility mapping. The names are unchanged from before this
+   migration; only what they resolve to has moved. */
 @theme inline {
-  --color-canvas: var(--brand-background);
-  --color-surface: var(--brand-surface);
-  --color-surface-alt: var(--brand-surface-raised);
-  --color-surface-soft: var(--brand-surface-soft);
+  --color-canvas: var(--bg);
+  --color-surface: var(--bg-card);
+  --color-surface-alt: var(--bg-elevated);
+  --color-surface-soft: var(--bg-inset);
 
-  --color-ink: var(--brand-text);
-  --color-ink-soft: var(--brand-text);
-  --color-muted: var(--brand-text-muted);
+  --color-ink: var(--text);
+  /* Body copy and descriptions. `--text-secondary` rather than `--text-muted`
+     because this is the product's main reading colour, and the document
+     reserves `--text-muted` for labels and eyebrows. */
+  --color-muted: var(--text-secondary);
+  --color-faint: var(--text-muted);
+  --color-dim: var(--text-dim);
 
-  --color-line: var(--brand-border);
-  --color-brand: var(--brand-accent);
-  --color-brand-hover: var(--brand-accent-hover);
-  --color-brand-tint: var(--brand-accent-tint);
-  --color-brand-edge: var(--brand-accent-edge);
+  --color-line: var(--border);
+  --color-line-subtle: var(--border-subtle);
+  --color-line-strong: var(--border-strong);
 
-  --color-danger: var(--brand-danger);
-  --color-danger-tint: var(--brand-danger-tint);
-  --color-warning: var(--brand-warning);
-  --color-warning-tint: var(--brand-warning-tint);
-  --color-success: var(--brand-success);
-  --color-success-tint: var(--brand-success-tint);
-  --color-info: var(--brand-link);
-  --color-info-tint: var(--brand-link-tint);
+  /* Fills, borders and glows. */
+  --color-brand: var(--accent);
+  --color-brand-hover: var(--accent-hover);
+  --color-brand-pressed: var(--accent-pressed);
+  --color-brand-tint: var(--accent-soft);
+  --color-brand-edge: color-mix(in srgb, var(--accent) 38%, transparent);
+  /* Orange AS TEXT — the one that darkens in light mode. */
+  --color-brand-text: var(--accent-text);
+  /* Ink on an orange fill. */
+  --color-on-accent: var(--accent-ink);
+
+  --color-danger: var(--danger);
+  --color-danger-tint: var(--danger-soft);
+  --color-warning: var(--warning);
+  --color-warning-tint: var(--warning-soft);
+  --color-success: var(--success);
+  --color-success-tint: var(--success-soft);
+  --color-info: var(--info);
+  --color-info-tint: var(--info-soft);
 
   --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
@@ -87,13 +158,13 @@
 html {
   -webkit-text-size-adjust: 100%;
   color-scheme: dark;
-  background: var(--brand-background);
+  background: var(--bg);
 }
 
 body {
   margin: 0;
-  background: var(--brand-background);
-  color: var(--brand-text);
+  background: var(--bg);
+  color: var(--text);
   font-family: var(--font-sans);
   font-size: 16px;
   line-height: 1.55;
@@ -111,14 +182,14 @@ h4 {
 
 /* One visible focus treatment, everywhere. Never removed — only restyled. */
 :where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
-  outline: 2px solid var(--brand-accent);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
   border-radius: 4px;
 }
 
 ::selection {
-  background: var(--brand-accent);
-  color: #000;
+  background: var(--accent);
+  color: var(--accent-ink);
 }
 
 /* Keyboard users get to the content without tabbing the whole nav. */
@@ -127,8 +198,8 @@ h4 {
   left: -9999px;
   top: 0;
   z-index: 100;
-  background: var(--brand-accent);
-  color: #000;
+  background: var(--accent);
+  color: var(--accent-ink);
   padding: 0.75rem 1rem;
   font-weight: 700;
 }
@@ -138,12 +209,14 @@ h4 {
 
 /* Restrained glow, used only on the primary action and active nav. */
 .glow-accent {
-  box-shadow: 0 0 0 1px var(--brand-accent-edge), 0 8px 24px -12px var(--brand-accent);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--accent) 38%, transparent),
+    0 8px 24px -12px var(--accent-glow);
 }
 
 /* Dark scrollbars, so the chrome does not fight the theme. */
 * {
-  scrollbar-color: var(--brand-border) transparent;
+  scrollbar-color: var(--border) transparent;
   scrollbar-width: thin;
 }
 *::-webkit-scrollbar {
@@ -151,18 +224,18 @@ h4 {
   height: 10px;
 }
 *::-webkit-scrollbar-thumb {
-  background: var(--brand-border);
+  background: var(--border);
   border-radius: 6px;
 }
 
 /* Native controls that would otherwise render light. */
 input[type='file'] {
-  color: var(--brand-text-muted);
+  color: var(--text-secondary);
 }
 input[type='file']::file-selector-button {
-  background: var(--brand-surface-soft);
-  color: var(--brand-text);
-  border: 1px solid var(--brand-border);
+  background: var(--bg-inset);
+  color: var(--text);
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 0.4rem 0.8rem;
   margin-right: 0.75rem;
@@ -186,7 +259,7 @@ input[type='time'] {
   }
 }
 .skeleton {
-  background: var(--brand-surface-soft);
+  background: var(--bg-inset);
   border-radius: 8px;
   animation: ohj-pulse 1.6s ease-in-out infinite;
 }

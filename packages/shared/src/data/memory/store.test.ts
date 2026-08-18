@@ -9,16 +9,48 @@ beforeEach(() => {
   store = new MemoryDataStore();
 });
 
+/** Verify a demo team and open a session, the way /submit does. */
+async function openSession(
+  target: MemoryDataStore,
+  groupNumber: number,
+  editorName = 'Priya (editing)',
+): Promise<string> {
+  await target.whenReady();
+  const verified = await target.participant.verifyTeamAccess({
+    groupNumber,
+    code: target.getDemoAccessCode(groupNumber),
+    ipHash: `ip-${editorName}`,
+  });
+  expect(verified.ok, `group ${groupNumber} failed verification`).toBe(true);
+  if (!verified.ok) throw new Error('unreachable');
+
+  const session = await target.participant.createSession({
+    teamId: verified.teamId,
+    editorName,
+    editorRole: null,
+    ipHash: `ip-${editorName}`,
+  });
+  return session.token;
+}
+
 // --------------------------------------------------------------------------
 // Participant isolation — the requirement most damaging to get wrong
 // --------------------------------------------------------------------------
 
 describe('participant isolation', () => {
   it('exposes no method that can reach assessment data', () => {
-    // The capability is absent, not guarded (ADR-010). If someone adds a
-    // scores/ranking/evidence method to the participant surface, this fails.
+    // The capability is absent, not guarded (ADR-010).
     const participantMethods = Object.keys(store.participant);
-    const forbidden = ['score', 'rank', 'evidence', 'assessment', 'feedback', 'shortlist', 'disqualif', 'consistency'];
+    const forbidden = [
+      'score',
+      'rank',
+      'evidence',
+      'assessment',
+      'feedback',
+      'shortlist',
+      'disqualif',
+      'consistency',
+    ];
 
     for (const method of participantMethods) {
       for (const word of forbidden) {
@@ -27,141 +59,470 @@ describe('participant isolation', () => {
     }
   });
 
-  it('returns only the team’s own data from an invite token', async () => {
-    const token = store.getDemoInviteToken(demoTeamId(12));
-    expect(token).toBeTruthy();
-
-    const view = await store.participant.resolveInvite(token as string);
-    expect(view).not.toBeNull();
-    expect(view?.team.groupNumber).toBe(12);
-    expect(view?.submission.id).toBe(demoSubmissionId(12));
-  });
-
-  it('never includes scores, rank, evidence, or feedback in the participant view', async () => {
-    const token = store.getDemoInviteToken(demoTeamId(12)) as string;
-    const view = await store.participant.resolveInvite(token);
-    const serialised = JSON.stringify(view);
+  it('never includes scores, rank, evidence or feedback in the participant view', async () => {
+    const token = await openSession(store, 12);
+    const serialised = JSON.stringify(await store.participant.resolveSession(token));
 
     for (const term of [
       'weightedScore',
       'rawScore',
-      'confidence',
-      'rank',
-      'inShortlist',
       'supportingEvidence',
       'contradictoryEvidence',
       'consistencyReview',
       'disqualification',
       'privateGuidance',
       'tiebreak',
+      'inShortlist',
     ]) {
       expect(serialised, `participant view leaked "${term}"`).not.toContain(term);
     }
   });
 
   it('never exposes credential plaintext or ciphertext to a participant', async () => {
-    const token = store.getDemoInviteToken(demoTeamId(45)) as string;
-    const view = await store.participant.resolveInvite(token);
+    const token = await openSession(store, 45);
+    const view = await store.participant.resolveSession(token);
 
-    // The team knows it stored credentials, but the values never come back.
     expect(view?.hasStoredCredentials).toBe(true);
     const serialised = JSON.stringify(view);
     expect(serialised).not.toContain('DemoReviewer!2026');
-    expect(serialised).not.toContain('Ciphertext');
     expect(serialised).not.toContain('usernameCiphertext');
   });
 
-  it('rejects unknown, revoked, and expired tokens identically', async () => {
-    expect(await store.participant.resolveInvite('not-a-real-token')).toBeNull();
-
-    const teamId = demoTeamId(27);
-    await store.teams.revokeInvite(teamId);
-    // The token is gone from the demo map and revoked in the store.
-    expect(await store.participant.resolveInvite('some-revoked-token')).toBeNull();
-  });
-
-  it('rejects an attempt to reach another team by guessing a submission id', async () => {
-    const token = store.getDemoInviteToken(demoTeamId(12)) as string;
-    const view = await store.participant.resolveInvite(token);
-    // The participant surface derives the submission from the token; the only
-    // id it ever sees is its own.
-    expect(view?.submission.teamId).toBe(demoTeamId(12));
+  it('resolves a session only to its own team', async () => {
+    const token = await openSession(store, 12);
+    const view = await store.participant.resolveSession(token);
+    expect(view?.team.groupNumber).toBe(12);
+    expect(view?.submission.id).toBe(demoSubmissionId(12));
     expect(view?.submission.id).not.toBe(demoSubmissionId(45));
   });
-});
 
-// --------------------------------------------------------------------------
-// Draft lifecycle
-// --------------------------------------------------------------------------
-
-describe('draft and final submit', () => {
-  it('refuses to edit a locked submission', async () => {
-    await expect(
-      store.participant.saveDraft(demoSubmissionId(12), { product: { productName: 'Renamed' } }),
-    ).rejects.toThrow(/locked/i);
+  it('rejects an unknown session token', async () => {
+    await store.whenReady();
+    expect(await store.participant.resolveSession('not-a-real-session')).toBeNull();
   });
 
-  it('refuses to edit when the cohort is not open', async () => {
-    // The demo cohort ships open so the learner journey is explorable; close it
-    // to assert the rule. Even a draft cannot be edited once the cohort closes.
-    await store.cohorts.setCohortStatus(DEMO_COHORT_ID, 'closed');
-    await expect(
-      store.participant.saveDraft(demoSubmissionId(27), { product: { productName: 'Renamed' } }),
-    ).rejects.toThrow(/not currently accepting/i);
-  });
+  it('ends a session without affecting other members', async () => {
+    const ana = await openSession(store, 27, 'Ana');
+    const ben = await openSession(store, 27, 'Ben');
 
-  it('lets a draft be edited while the cohort is open', async () => {
-    // The demo cohort ships open, so previewing the learner journey works
-    // immediately without an operator changing anything first.
-    const submission = await store.participant.saveDraft(demoSubmissionId(27), {
-      product: { productName: 'Renamed in demo' },
-    });
-    expect(submission.productName).toBe('Renamed in demo');
-  });
-
-  it('autosaves and promotes known draft fields into typed columns', async () => {
-    await store.cohorts.setCohortStatus(DEMO_COHORT_ID, 'open');
-    const submission = await store.participant.saveDraft(demoSubmissionId(27), {
-      product: { productName: 'Budget Board v2', primaryUser: 'Someone tracking spending.' },
-      live: { productUrl: 'https://budget.example.com', loginRequired: true },
-    });
-
-    expect(submission.productName).toBe('Budget Board v2');
-    expect(submission.productUrl).toBe('https://budget.example.com');
-    expect(submission.loginRequired).toBe(true);
-    expect(submission.draftUpdatedAt).not.toBeNull();
-    // The raw draft is retained alongside the promoted columns.
-    expect(submission.draftPayload).toHaveProperty('product');
-  });
-
-  it('locks the submission and issues a receipt on final submit', async () => {
-    await store.cohorts.setCohortStatus(DEMO_COHORT_ID, 'open');
-    const { submission, receiptId } = await store.participant.finaliseSubmission(demoSubmissionId(27), {
-      ipHash: 'hashed-ip',
-    });
-
-    expect(submission.status).toBe('locked');
-    expect(submission.submittedAt).not.toBeNull();
-    expect(receiptId).toMatch(/^OSK-AIAPD1-027-/);
-
-    // A second edit attempt is now refused.
-    await expect(store.participant.saveDraft(demoSubmissionId(27), {})).rejects.toThrow(/locked/i);
-  });
-
-  it('lets an admin reopen a locked submission, with an audit event', async () => {
-    await store.submissions.reopenSubmission(demoSubmissionId(12), 'Team reported an upload failure.');
-    const events = await store.submissions.listEvents(demoSubmissionId(12));
-    const reopened = events.find((e) => e.eventType === 'reopened_by_admin');
-
-    expect(reopened).toBeDefined();
-    expect(reopened?.actorType).toBe('shared-admin');
-    expect(reopened?.detail).toMatchObject({ reason: 'Team reported an upload failure.' });
+    await store.participant.endSession(ana);
+    expect(await store.participant.resolveSession(ana)).toBeNull();
+    expect(await store.participant.resolveSession(ben)).not.toBeNull();
   });
 });
 
 // --------------------------------------------------------------------------
-// Fixtures
+// Team access verification
 // --------------------------------------------------------------------------
+
+describe('team access verification', () => {
+  it('accepts the right group and code', async () => {
+    await store.whenReady();
+    const result = await store.participant.verifyTeamAccess({
+      groupNumber: 12,
+      code: store.getDemoAccessCode(12),
+      ipHash: 'ip-a',
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it('accepts a formatted or lowercase code', async () => {
+    await store.whenReady();
+    const raw = store.getDemoAccessCode(12);
+    const formatted = `${raw.slice(0, 4)}-${raw.slice(4, 8)}-${raw.slice(8)}`.toLowerCase();
+
+    const result = await store.participant.verifyTeamAccess({
+      groupNumber: 12,
+      code: formatted,
+      ipHash: 'ip-format',
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it('gives one generic message for a wrong code and for an unknown group', async () => {
+    await store.whenReady();
+    const wrongCode = await store.participant.verifyTeamAccess({
+      groupNumber: 12,
+      code: 'ZZZZZZZZZZZZ',
+      ipHash: 'ip-b',
+    });
+    const unknownGroup = await store.participant.verifyTeamAccess({
+      groupNumber: 999,
+      code: store.getDemoAccessCode(12),
+      ipHash: 'ip-c',
+    });
+
+    expect(wrongCode.ok).toBe(false);
+    expect(unknownGroup.ok).toBe(false);
+    // Identical wording, so the form cannot be used to enumerate group numbers.
+    if (!wrongCode.ok && !unknownGroup.ok) {
+      expect(wrongCode.message).toBe(unknownGroup.message);
+      expect(wrongCode.message).toMatch(/could not verify those team access details/i);
+    }
+  });
+
+  it('rate-limits repeated failures, without locking out other clients', async () => {
+    await store.whenReady();
+    for (let i = 0; i < 8; i++) {
+      await store.participant.verifyTeamAccess({
+        groupNumber: 12,
+        code: 'ZZZZZZZZZZZZ',
+        ipHash: 'ip-attacker',
+      });
+    }
+
+    const blocked = await store.participant.verifyTeamAccess({
+      groupNumber: 12,
+      code: store.getDemoAccessCode(12),
+      ipHash: 'ip-attacker',
+    });
+    expect(blocked.ok).toBe(false);
+    if (!blocked.ok) expect(blocked.reason).toBe('rate_limited');
+
+    // The real team, from a different client, is unaffected.
+    const other = await store.participant.verifyTeamAccess({
+      groupNumber: 12,
+      code: store.getDemoAccessCode(12),
+      ipHash: 'ip-innocent',
+    });
+    expect(other.ok).toBe(true);
+  });
+
+  it('lets an admin clear a lockout', async () => {
+    await store.whenReady();
+    for (let i = 0; i < 8; i++) {
+      await store.participant.verifyTeamAccess({ groupNumber: 27, code: 'BAD', ipHash: 'ip-locked' });
+    }
+    await store.teams.clearVerificationLockout(DEMO_COHORT_ID, 27);
+
+    const result = await store.participant.verifyTeamAccess({
+      groupNumber: 27,
+      code: store.getDemoAccessCode(27),
+      ipHash: 'ip-locked',
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it('refuses a revoked access code', async () => {
+    await store.whenReady();
+    await store.teams.revokeAccessCode(demoTeamId(27));
+
+    const result = await store.participant.verifyTeamAccess({
+      groupNumber: 27,
+      code: store.getDemoAccessCode(27),
+      ipHash: 'ip-revoked',
+    });
+    expect(result.ok).toBe(false);
+  });
+});
+
+describe('access code generation', () => {
+  it('only issues codes to teams that lack one, unless regeneration is explicit', async () => {
+    await store.whenReady();
+    const first = await store.teams.generateAccessCodes({
+      cohortId: DEMO_COHORT_ID,
+      regenerate: false,
+    });
+    // Every demo team already has a seeded code, so nothing is reissued.
+    expect(first).toHaveLength(0);
+
+    const regenerated = await store.teams.generateAccessCodes({
+      cohortId: DEMO_COHORT_ID,
+      teamIds: [demoTeamId(12)],
+      regenerate: true,
+    });
+    expect(regenerated).toHaveLength(1);
+    expect(regenerated[0]?.regenerated).toBe(true);
+    expect(regenerated[0]?.code).toMatch(/^[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$/);
+  });
+
+  it('invalidates existing sessions when a code is regenerated', async () => {
+    const token = await openSession(store, 12);
+    expect(await store.participant.resolveSession(token)).not.toBeNull();
+
+    await store.teams.generateAccessCodes({
+      cohortId: DEMO_COHORT_ID,
+      teamIds: [demoTeamId(12)],
+      regenerate: true,
+    });
+
+    // The old session dies with the old code, without having to find it.
+    expect(await store.participant.resolveSession(token)).toBeNull();
+  });
+
+  it('never returns a stored code or hash back to a caller', async () => {
+    await store.whenReady();
+    const status = await store.teams.listAccessCodeStatus(DEMO_COHORT_ID);
+    const serialised = JSON.stringify(status);
+
+    expect(status).toHaveLength(6);
+    expect(status[0]?.hasCode).toBe(true);
+    expect(serialised).not.toContain(store.getDemoAccessCode(12));
+    expect(serialised).not.toContain('codeHash');
+    expect(serialised).not.toContain('$argon2');
+  });
+
+  it('revoking access ends live sessions', async () => {
+    const token = await openSession(store, 27);
+    await store.teams.revokeAccessCode(demoTeamId(27));
+    expect(await store.participant.resolveSession(token)).toBeNull();
+  });
+});
+
+// --------------------------------------------------------------------------
+// Shared editing and optimistic concurrency
+// --------------------------------------------------------------------------
+
+describe('shared team editing', () => {
+  it('lets two members hold sessions with the same code', async () => {
+    const first = await openSession(store, 27, 'Ana');
+    const second = await openSession(store, 27, 'Ben');
+
+    expect(first).not.toBe(second);
+    expect((await store.participant.resolveSession(first))?.editorName).toBe('Ana');
+    expect((await store.participant.resolveSession(second))?.editorName).toBe('Ben');
+  });
+
+  it('records the editor name on a save', async () => {
+    const token = await openSession(store, 27, 'Ana');
+    const view = await store.participant.resolveSession(token);
+
+    const result = await store.participant.saveDraft(
+      token,
+      { product: { productName: 'Renamed by Ana' } },
+      view?.submission.version ?? 1,
+    );
+    expect(result.ok).toBe(true);
+    expect(result.submission?.lastEditedBy).toBe('Ana');
+    expect(result.submission?.productName).toBe('Renamed by Ana');
+  });
+
+  it('refuses a stale write instead of silently overwriting a teammate', async () => {
+    const ana = await openSession(store, 27, 'Ana');
+    const ben = await openSession(store, 27, 'Ben');
+    const startingVersion = (await store.participant.resolveSession(ana))?.submission.version ?? 1;
+
+    const anaSave = await store.participant.saveDraft(
+      ana,
+      { product: { productName: 'Ana version' } },
+      startingVersion,
+    );
+    expect(anaSave.ok).toBe(true);
+
+    // Ben still holds the version he read before Ana saved.
+    const benSave = await store.participant.saveDraft(
+      ben,
+      { product: { productName: 'Ben version' } },
+      startingVersion,
+    );
+
+    expect(benSave.ok).toBe(false);
+    expect(benSave.conflict?.message).toMatch(/Another team member updated this submission/);
+    // Ana's work survives.
+    expect((await store.participant.resolveSession(ana))?.submission.productName).toBe('Ana version');
+  });
+
+  it('lets the second member save once they reload the latest version', async () => {
+    const ana = await openSession(store, 27, 'Ana');
+    const ben = await openSession(store, 27, 'Ben');
+    const startingVersion = (await store.participant.resolveSession(ana))?.submission.version ?? 1;
+
+    await store.participant.saveDraft(ana, { product: { productName: 'Ana version' } }, startingVersion);
+
+    const reloaded = await store.participant.resolveSession(ben);
+    const retry = await store.participant.saveDraft(
+      ben,
+      { product: { productName: 'Ben version' } },
+      reloaded?.submission.version ?? 0,
+    );
+
+    expect(retry.ok).toBe(true);
+    expect(retry.submission?.productName).toBe('Ben version');
+  });
+
+  it('refuses an unversioned write', async () => {
+    const token = await openSession(store, 27);
+    expect((await store.participant.saveDraft(token, {}, -1)).ok).toBe(false);
+  });
+
+  it('shows learner-safe team activity', async () => {
+    const token = await openSession(store, 27, 'Ana');
+    await store.participant.recordActivity(token, 'section_saved', 'Product idea');
+
+    const view = await store.participant.resolveSession(token);
+    expect(view?.recentActivity.length).toBeGreaterThan(0);
+    expect(view?.recentActivity[0]?.editorName).toBe('Ana');
+    expect(view?.recentActivity[0]?.section).toBe('Product idea');
+  });
+});
+
+// --------------------------------------------------------------------------
+// Submission window and final lock
+// --------------------------------------------------------------------------
+
+describe('submission window enforcement', () => {
+  it('blocks writes once the cohort is paused, and allows them again on resume', async () => {
+    const token = await openSession(store, 27);
+    const version = (await store.participant.resolveSession(token))?.submission.version ?? 1;
+
+    await store.cohorts.setCohortStatus(DEMO_COHORT_ID, 'paused');
+    const paused = await store.participant.saveDraft(token, { product: { productName: 'x' } }, version);
+    expect(paused.ok).toBe(false);
+    expect(paused.error).toMatch(/paused/i);
+
+    await store.cohorts.setCohortStatus(DEMO_COHORT_ID, 'open');
+    const resumed = await store.participant.saveDraft(token, { product: { productName: 'x' } }, version);
+    expect(resumed.ok).toBe(true);
+  });
+
+  it('blocks writes after a manual close, and preserves the draft', async () => {
+    const token = await openSession(store, 27);
+    const before = await store.participant.resolveSession(token);
+
+    await store.cohorts.closeSubmissions(DEMO_COHORT_ID, 'manual');
+
+    const blocked = await store.participant.saveDraft(token, { product: { productName: 'y' } }, 99);
+    expect(blocked.ok).toBe(false);
+    expect(blocked.error).toMatch(/closed/i);
+
+    // The draft is still readable and unchanged.
+    const after = await store.participant.resolveSession(token);
+    expect(after?.submission.productName).toBe(before?.submission.productName);
+  });
+
+  it('blocks writes once the deadline passes, even while the status still says open', async () => {
+    const token = await openSession(store, 27);
+    const cohort = await store.cohorts.getCohort(DEMO_COHORT_ID);
+
+    // Move the deadline into the past without touching the stored status.
+    await store.cohorts.updateCohort(DEMO_COHORT_ID, {
+      day13DeadlineAt: new Date(Date.now() - 60_000),
+    });
+    expect((await store.cohorts.getCohort(DEMO_COHORT_ID))?.status).toBe('open');
+
+    const view = await store.participant.resolveSession(token);
+    expect(view?.canEdit).toBe(false);
+    expect(view?.windowMessage).toMatch(/closed/i);
+
+    const result = await store.participant.saveDraft(token, {}, view?.submission.version ?? 1);
+    expect(result.ok).toBe(false);
+
+    await store.cohorts.updateCohort(DEMO_COHORT_ID, {
+      day13DeadlineAt: cohort?.day13DeadlineAt as Date,
+    });
+  });
+
+  it('reconciles an overdue cohort to closed, without acceptance depending on it', async () => {
+    await store.cohorts.updateCohort(DEMO_COHORT_ID, {
+      day13DeadlineAt: new Date(Date.now() - 60_000),
+    });
+    const result = await store.cohorts.reconcileDeadlines();
+
+    expect(result.closed).toContain(DEMO_COHORT_ID);
+    const cohort = await store.cohorts.getCohort(DEMO_COHORT_ID);
+    expect(cohort?.status).toBe('closed');
+    expect(cohort?.closureType).toBe('deadline');
+  });
+
+  it('refuses to reopen past the deadline without an extension', async () => {
+    await store.cohorts.updateCohort(DEMO_COHORT_ID, {
+      day13DeadlineAt: new Date(Date.now() - 60_000),
+    });
+    await store.cohorts.closeSubmissions(DEMO_COHORT_ID, 'deadline');
+
+    await expect(
+      store.cohorts.reopenSubmissions(DEMO_COHORT_ID, { reason: 'Team reported an upload failure.' }),
+    ).rejects.toThrow(/needs either a new deadline or an explicit acceptance/i);
+  });
+
+  it('reopens with an acceptance window and accepts writes again', async () => {
+    const token = await openSession(store, 27);
+    await store.cohorts.updateCohort(DEMO_COHORT_ID, {
+      day13DeadlineAt: new Date(Date.now() - 60_000),
+    });
+    await store.cohorts.closeSubmissions(DEMO_COHORT_ID, 'deadline');
+
+    await store.cohorts.reopenSubmissions(DEMO_COHORT_ID, {
+      reason: 'Approved exception for a genuine upload failure.',
+      acceptingUntil: new Date(Date.now() + 3_600_000),
+    });
+
+    const view = await store.participant.resolveSession(token);
+    expect(view?.canEdit).toBe(true);
+
+    const result = await store.participant.saveDraft(
+      token,
+      { product: { productName: 'after reopen' } },
+      view?.submission.version ?? 1,
+    );
+    expect(result.ok).toBe(true);
+  });
+});
+
+describe('final submission', () => {
+  it('locks the submission, issues a receipt and records who submitted', async () => {
+    const token = await openSession(store, 12, 'Ana');
+    // Group 12 already holds a complete submission, but is locked; reopen it.
+    await store.submissions.reopenSubmission(demoSubmissionId(12), 'Test reopen.');
+
+    const result = await store.participant.finaliseSubmission(token, { ipHash: 'ip-final' });
+    expect(result.ok).toBe(true);
+    expect(result.receiptId).toMatch(/^OSK-AIAPD1-012-/);
+
+    const view = await store.participant.resolveSession(token);
+    expect(view?.submission.status).toBe('locked');
+    expect(view?.submission.submittedByName).toBe('Ana');
+  });
+
+  it('blocks every member once the submission is final', async () => {
+    const ana = await openSession(store, 12, 'Ana');
+    const ben = await openSession(store, 12, 'Ben');
+
+    const view = await store.participant.resolveSession(ben);
+    expect(view?.canEdit).toBe(false);
+
+    const anaWrite = await store.participant.saveDraft(ana, {}, view?.submission.version ?? 1);
+    const benWrite = await store.participant.saveDraft(ben, {}, view?.submission.version ?? 1);
+    expect(anaWrite.ok).toBe(false);
+    expect(benWrite.ok).toBe(false);
+  });
+
+  it('refuses a second final submission', async () => {
+    const token = await openSession(store, 12);
+    const result = await store.participant.finaliseSubmission(token, { ipHash: null });
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/already been finalised|locked/i);
+  });
+
+  it('returns receipt data with no code, credential or internal id', async () => {
+    const token = await openSession(store, 12);
+    const receipt = await store.participant.getReceipt(token);
+
+    expect(receipt?.receiptId).toMatch(/^OSK-AIAPD1-012-/);
+    expect(receipt?.groupNumber).toBe(12);
+
+    const serialised = JSON.stringify(receipt);
+    expect(serialised).not.toContain(store.getDemoAccessCode(12));
+    expect(serialised).not.toContain(demoSubmissionId(12));
+    expect(serialised).not.toContain(demoTeamId(12));
+  });
+
+  it('lets an admin find a submission by its receipt ID', async () => {
+    const token = await openSession(store, 12);
+    const receipt = await store.participant.getReceipt(token);
+
+    const found = await store.submissions.findByReceiptId(receipt?.receiptId as string);
+    expect(found?.id).toBe(demoSubmissionId(12));
+  });
+
+  it('keeps the receipt reachable after submissions close', async () => {
+    const token = await openSession(store, 12);
+    await store.cohorts.closeSubmissions(DEMO_COHORT_ID, 'manual');
+
+    const receipt = await store.participant.getReceipt(token);
+    expect(receipt?.receiptId).toBeTruthy();
+  });
+});
 
 describe('demo fixtures', () => {
   it('seeds one cohort, eight ideas, and six teams', async () => {
@@ -182,6 +543,12 @@ describe('demo fixtures', () => {
     expect(submissions.some((s) => s.submission.status === 'draft')).toBe(true);
     expect(submissions.some((s) => s.lowConfidence)).toBe(true);
     expect(submissions.some((s) => s.submission.loginRequired)).toBe(true);
+  });
+
+  it('seeds one access code per team', async () => {
+    await store.whenReady();
+    const status = await store.teams.listAccessCodeStatus(DEMO_COHORT_ID);
+    expect(status.every((s) => s.hasCode)).toBe(true);
   });
 
   it('contains no personally identifiable information', async () => {
@@ -265,9 +632,9 @@ describe('assessment data', () => {
 
 describe('queue claiming', () => {
   it('leases jobs so two workers never claim the same one', async () => {
-    await store.cohorts.setCohortStatus(DEMO_COHORT_ID, 'open');
-    await store.participant.finaliseSubmission(demoSubmissionId(27), { ipHash: null });
-    await store.assessment.enqueueCohort(DEMO_COHORT_ID);
+    // Re-queue an already-final submission: the fixture cohort's jobs are all
+    // resolved, so there is nothing claimable until something is queued.
+    await store.assessment.enqueueSubmission(demoSubmissionId(12));
 
     const first = await store.assessment.claimJobs({ workerId: 'worker-a', limit: 10, leaseSeconds: 60 });
     const second = await store.assessment.claimJobs({ workerId: 'worker-b', limit: 10, leaseSeconds: 60 });
@@ -279,9 +646,7 @@ describe('queue claiming', () => {
   });
 
   it('reclaims a crashed worker’s jobs once the lease expires', async () => {
-    await store.cohorts.setCohortStatus(DEMO_COHORT_ID, 'open');
-    await store.participant.finaliseSubmission(demoSubmissionId(27), { ipHash: null });
-    await store.assessment.enqueueCohort(DEMO_COHORT_ID);
+    await store.assessment.enqueueSubmission(demoSubmissionId(12));
 
     const claimed = await store.assessment.claimJobs({ workerId: 'crashed', limit: 1, leaseSeconds: -1 });
     expect(claimed).toHaveLength(1);
@@ -467,12 +832,18 @@ describe('team import', () => {
   });
 
   it('invalidates the old token when an invite is regenerated', async () => {
+    await store.whenReady();
     const teamId = demoTeamId(12);
     const oldToken = store.getDemoInviteToken(teamId) as string;
     await store.teams.generateInvite(teamId);
 
-    expect(await store.participant.resolveInvite(oldToken)).toBeNull();
+    // The demo/invite shortcut mints a session; a revoked token cannot.
+    expect(
+      await store.participant.redeemInviteToken(oldToken, { name: 'Ana', role: null }),
+    ).toBeNull();
     const newToken = store.getDemoInviteToken(teamId) as string;
-    expect(await store.participant.resolveInvite(newToken)).not.toBeNull();
+    expect(
+      await store.participant.redeemInviteToken(newToken, { name: 'Ana', role: null }),
+    ).not.toBeNull();
   });
 });

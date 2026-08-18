@@ -1,0 +1,20 @@
+# Keep the upload to source. Everything here is either rebuilt on Vercel,
+# irrelevant to a build, or must never leave this machine.
+
+node_modules
+.env
+.env.*
+reference-materials
+
+# Local build outputs — Vercel builds its own.
+.next
+.next-*
+apps/web/.next
+apps/web/.next-*
+
+# Test and review artefacts, including screenshots of real screens.
+test-results
+playwright-report
+e2e
+e2e-acceptance
+docs/deck

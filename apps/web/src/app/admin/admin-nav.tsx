@@ -67,13 +67,13 @@ export function AdminNav({
               className={cn(
                 'flex items-center gap-3 rounded-[10px] px-3 py-2.5 text-sm font-medium transition-colors',
                 active
-                  ? 'bg-brand-tint text-ink ring-1 ring-inset ring-[var(--brand-accent-edge)]'
+                  ? 'bg-brand-tint text-ink ring-1 ring-inset ring-brand-edge'
                   : 'text-muted hover:bg-surface-alt hover:text-ink',
               )}
             >
               <span
                 aria-hidden="true"
-                className={cn('w-4 text-center text-base', active ? 'text-brand' : 'text-muted')}
+                className={cn('w-4 text-center text-base', active ? 'text-brand-text' : 'text-muted')}
               >
                 {item.icon}
               </span>
@@ -155,7 +155,7 @@ export function AdminNav({
               <p className="mt-1 text-xs text-muted">Synthetic data only.</p>
               <Link
                 href="/"
-                className="mt-2 inline-block text-xs font-semibold text-brand underline underline-offset-4"
+                className="mt-2 inline-block text-xs font-semibold text-brand-text underline underline-offset-4"
               >
                 Preview learner journey
               </Link>

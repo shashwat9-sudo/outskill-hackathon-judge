@@ -1,5 +1,12 @@
 import { NextResponse } from 'next/server';
-import { getStore } from '@/lib/store';
+import { getEnvConfig, getStoreAsync } from '@/lib/store';
+
+/**
+ * How long this may run on a serverless host.
+ *
+ * Streams a resource file, which can be as large as a deck template.
+ */
+export const maxDuration = 60;
 
 /**
  * Participant-visible resource download.
@@ -19,7 +26,7 @@ const KIND_ALIASES: Record<string, string> = {
 
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const store = getStore();
+  const store = await getStoreAsync();
 
   const resources = await store.resources.listResources(null);
   const aliasKind = KIND_ALIASES[id];
@@ -39,6 +46,8 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
     300,
   );
   return NextResponse.redirect(
-    new URL(signedUrl, process.env.APP_BASE_URL ?? 'http://localhost:3000'),
+    // Resolved through the validated config, not a second hardcoded default:
+    // two sources for one value is how they drift apart.
+    new URL(signedUrl, getEnvConfig().APP_BASE_URL),
   );
 }

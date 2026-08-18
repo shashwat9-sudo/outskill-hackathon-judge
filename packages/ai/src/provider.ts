@@ -12,8 +12,9 @@
 
 import type { z } from 'zod';
 import { UNTRUSTED_CONTENT_INSTRUCTION } from './injection';
+import { schemaInstruction } from './schema-shape';
 
-export type AiProviderName = 'demo' | 'anthropic' | 'openai' | 'custom';
+export type AiProviderName = 'demo' | 'anthropic' | 'openai' | 'gemini' | 'ollama' | 'custom';
 
 export interface AiConfig {
   provider: AiProviderName;
@@ -80,14 +81,31 @@ export class AiClient {
     return this.provider.modelVersion;
   }
 
+  /** Which provider is behind this client. Read by the dispatch guard. */
+  get providerName(): AiProviderName {
+    return this.provider.name;
+  }
+
   /**
    * Run a structured-output call.
    *
-   * The untrusted-content instruction is prepended to every system prompt here
-   * rather than at call sites, so a new prompt cannot forget it.
+   * Two things are attached here rather than at call sites, so a new prompt
+   * cannot forget either: the untrusted-content instruction, and the shape of
+   * the schema the response will be validated against.
+   *
+   * The schema description was added after the first real provider run failed
+   * three times with `deck: Required; written: Required; risks: Required`. The
+   * prompt had asked for "valid JSON matching the required structure" without
+   * ever stating the structure, so the model was being marked wrong for not
+   * guessing field names. Generating it from the schema keeps the prompt and
+   * the validator from drifting apart.
    */
   async run<T>(request: AiRequest<T>): Promise<AiResponse<T>> {
-    const system = `${UNTRUSTED_CONTENT_INSTRUCTION}\n\n${request.system}`;
+    const system = [
+      UNTRUSTED_CONTENT_INSTRUCTION,
+      request.system,
+      schemaInstruction(request.schema as unknown as z.ZodTypeAny),
+    ].join('\n\n');
     const attemptsAllowed = Math.max(1, this.config.maxRetries + 1);
 
     let lastError = '';
@@ -97,7 +115,9 @@ export class AiClient {
       const user =
         attempt === 1
           ? request.user
-          : `${request.user}\n\nYour previous response could not be parsed (${lastError}). Return ONLY valid JSON matching the required structure.`;
+          : `${request.user}\n\nYour previous response was rejected: ${lastError}\n\n` +
+            'Return ONLY the JSON object described in the system instructions, with every ' +
+            'required field present.';
 
       let text: string;
       try {
@@ -301,6 +321,231 @@ class OpenAiProvider implements AiProvider {
   }
 }
 
+
+/**
+ * Google Gemini (Generative Language API).
+ *
+ * Worth its own adapter rather than reuse of the OpenAI one: the request shape
+ * is different (`contents` / `parts`, `systemInstruction` as its own field),
+ * the key travels in a header rather than a bearer token, and — the part that
+ * matters for judging — it can return a 200 with no text at all when a
+ * response is stopped by a safety filter or the token ceiling. Treating that
+ * as an empty completion would score a submission on nothing, so it is turned
+ * into a typed error.
+ *
+ * `responseMimeType: application/json` asks for JSON directly, which is
+ * belt-and-braces with the parsing in `AiClient` rather than a replacement for
+ * it: the model can still return prose, and the schema still has to validate.
+ */
+class GeminiProvider implements AiProvider {
+  readonly name = 'gemini' as const;
+  readonly modelVersion: string;
+
+  constructor(private readonly config: AiConfig) {
+    // Not defaulted to a paid model. The caller chooses via AI_MODEL, and this
+    // fallback is the current free-tier one.
+    this.modelVersion = config.model ?? 'gemini-2.5-flash-lite';
+  }
+
+  async complete(input: { system: string; user: string; maxOutputTokens: number; timeoutMs: number }) {
+    const base = this.config.baseUrl ?? 'https://generativelanguage.googleapis.com';
+    const url = `${base}/v1beta/models/${encodeURIComponent(this.modelVersion)}:generateContent`;
+
+    const response = await fetchWithTimeout(
+      url,
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          // Header rather than a query parameter: a key in a URL ends up in
+          // access logs, proxy logs and error messages.
+          'x-goog-api-key': this.config.apiKey ?? '',
+        },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: input.system }] },
+          contents: [{ role: 'user', parts: [{ text: input.user }] }],
+          generationConfig: {
+            maxOutputTokens: input.maxOutputTokens,
+            responseMimeType: 'application/json',
+            // Judging must be as reproducible as the provider allows. Two runs
+            // of the same submission should not disagree because of sampling.
+            temperature: 0,
+          },
+        }),
+      },
+      input.timeoutMs,
+    );
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => '');
+      throw new AiError(
+        `Gemini returned ${response.status}: ${describeGeminiError(response.status, body)}`,
+        // 429 is retryable in general, but free-tier daily exhaustion is not —
+        // retrying it just burns the remaining quota faster.
+        (response.status === 429 && !isQuotaExhausted(body)) || response.status >= 500,
+      );
+    }
+
+    const json = (await response.json()) as GeminiResponse;
+    const candidate = json.candidates?.[0];
+    const text = (candidate?.content?.parts ?? [])
+      .map((part) => part.text ?? '')
+      .join('');
+
+    if (!text.trim()) {
+      // A 200 with no text. The reason decides whether retrying is sensible.
+      const reason = candidate?.finishReason ?? json.promptFeedback?.blockReason ?? 'unknown';
+      throw new AiError(
+        `Gemini returned no text (finish reason: ${reason}). ` +
+          (reason === 'MAX_TOKENS'
+            ? 'The response hit the output ceiling before producing anything usable.'
+            : 'This is usually a safety filter or a blocked prompt.'),
+        reason === 'MAX_TOKENS' || reason === 'unknown',
+      );
+    }
+
+    return {
+      text,
+      usage: {
+        inputTokens: json.usageMetadata?.promptTokenCount ?? 0,
+        outputTokens: json.usageMetadata?.candidatesTokenCount ?? 0,
+      },
+    };
+  }
+}
+
+interface GeminiResponse {
+  candidates?: {
+    content?: { parts?: { text?: string }[] };
+    finishReason?: string;
+  }[];
+  promptFeedback?: { blockReason?: string };
+  usageMetadata?: {
+    promptTokenCount?: number;
+    candidatesTokenCount?: number;
+  };
+}
+
+/** Free-tier exhaustion looks like a rate limit but retrying cannot fix it. */
+export function isQuotaExhausted(body: string): boolean {
+  return /RESOURCE_EXHAUSTED|quota|billing|exceeded your current quota/i.test(body);
+}
+
+/**
+ * Turn a provider error into something an operator can act on.
+ *
+ * The raw body is a wall of JSON at 23:50. These are the four cases that
+ * actually happen, and each has a different next step.
+ */
+export function describeGeminiError(status: number, body: string): string {
+  if (status === 429 && isQuotaExhausted(body)) {
+    return (
+      'the free quota for this model is exhausted. Wait for the quota to reset, ' +
+      'switch AI_MODEL to another free-tier model, or enable billing.'
+    );
+  }
+  if (status === 429) return 'rate limited — too many requests in a short window.';
+  if (status === 400 && /API key not valid/i.test(body)) {
+    return 'the API key was rejected. Check AI_API_KEY.';
+  }
+  if (status === 404) {
+    // The provider's own message is kept rather than replaced. A 404 here has
+    // several quite different causes — a typo, a retired model, or a model that
+    // is listed but closed to new keys — and only Google knows which. The first
+    // real run hit the third: `gemini-2.5-flash-lite` appears in ListModels and
+    // still refuses new users, so a generic "check AI_MODEL" sent the operator
+    // to verify a name that was already correct.
+    const detail = extractMessage(body);
+    return (
+      `the model "${extractModel(body)}" could not be used. ` +
+      (detail ? `Google says: ${detail} ` : '') +
+      'Set AI_MODEL to one your key can reach.'
+    );
+  }
+  if (status === 403) return 'the key is not permitted to use this model or the API is not enabled.';
+  return body.slice(0, 300);
+}
+
+function extractMessage(body: string): string {
+  try {
+    return String((JSON.parse(body) as { error?: { message?: string } }).error?.message ?? '');
+  } catch {
+    return '';
+  }
+}
+
+function extractModel(body: string): string {
+  return /models\/([\w.-]+)/.exec(body)?.[1] ?? 'unknown';
+}
+
+/**
+ * Ollama — a model running on this machine.
+ *
+ * No key, no network egress, no cost. Included because "we cannot judge until
+ * someone pays for an API" is a bad place for the project to be, and because a
+ * local provider is the only way to exercise the pipeline with no external
+ * dependency at all.
+ *
+ * Same contract as every other provider: the response is parsed and validated
+ * against the same schema. A small local model will fail that validation more
+ * often, which is exactly what the retry-then-refuse path is for.
+ */
+class OllamaProvider implements AiProvider {
+  readonly name = 'ollama' as const;
+  readonly modelVersion: string;
+
+  constructor(private readonly config: AiConfig) {
+    this.modelVersion = config.model ?? 'llama3.2';
+  }
+
+  async complete(input: { system: string; user: string; maxOutputTokens: number; timeoutMs: number }) {
+    const base = this.config.baseUrl ?? 'http://127.0.0.1:11434';
+
+    const response = await fetchWithTimeout(
+      `${base}/api/chat`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: this.modelVersion,
+          stream: false,
+          format: 'json',
+          options: { temperature: 0, num_predict: input.maxOutputTokens },
+          messages: [
+            { role: 'system', content: input.system },
+            { role: 'user', content: input.user },
+          ],
+        }),
+      },
+      input.timeoutMs,
+    );
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => '');
+      throw new AiError(
+        response.status === 404
+          ? `Ollama does not have the model "${this.modelVersion}". Run: ollama pull ${this.modelVersion}`
+          : `Ollama returned ${response.status}: ${body.slice(0, 300)}`,
+        response.status >= 500,
+      );
+    }
+
+    const json = (await response.json()) as {
+      message?: { content?: string };
+      prompt_eval_count?: number;
+      eval_count?: number;
+    };
+
+    return {
+      text: json.message?.content ?? '',
+      usage: {
+        inputTokens: json.prompt_eval_count ?? 0,
+        outputTokens: json.eval_count ?? 0,
+      },
+    };
+  }
+}
+
 /** Deterministic fixture provider. No key, no network, identical every run. */
 export class DemoProvider implements AiProvider {
   readonly name = 'demo' as const;
@@ -351,6 +596,13 @@ export function createAiClient(
     case 'anthropic':
       requireKey(config);
       return new AiClient(new AnthropicProvider(config), config);
+    case 'gemini':
+      requireKey(config);
+      return new AiClient(new GeminiProvider(config), config);
+    case 'ollama':
+      // Deliberately no key check: a model on this machine has nothing to
+      // authenticate against, and demanding one would be theatre.
+      return new AiClient(new OllamaProvider(config), config);
     case 'openai':
     case 'custom':
       requireKey(config);

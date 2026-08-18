@@ -3,9 +3,11 @@ import {
   evaluateShortlistWindow,
   formatDuration,
   formatInTimezone,
+  JUDGING_UNAVAILABLE_MESSAGE,
   type AssessmentStage,
 } from '@ohj/shared';
-import { getStore } from '@/lib/store';
+import { describeProviderStatus } from '@ohj/ai';
+import { getCapabilities, getEnvConfig, getStoreAsync } from '@/lib/store';
 import { requireAdmin } from '@/server/admin-auth';
 import { startJudgingAction } from '@/server/admin-actions';
 import { AdminForm } from '@/components/admin-form';
@@ -48,11 +50,33 @@ const PIPELINE: { label: string; stages: AssessmentStage[] }[] = [
 
 export default async function JudgingPage() {
   const session = await requireAdmin();
-  const store = getStore();
+  const store = await getStoreAsync();
+  const env = getEnvConfig();
   const cohorts = await store.cohorts.listCohorts();
   const cohort = cohorts.find((c) => c.status === 'judging') ?? cohorts[0];
 
   if (!cohort) return <EmptyState title="No cohorts yet" />;
+
+  // Every read below reaches the assessment repository. A deployment where it
+  // is unavailable would throw rather than return an empty queue that reads as
+  // "nothing to judge", so the page stops here and says so plainly instead.
+  if (!getCapabilities().assessment) {
+    return (
+      <div>
+        <PageHeading
+          title="Judging"
+          description="Automated assessment for this cohort."
+        />
+        <Alert tone="info" testId="judging-unavailable">
+          <p className="font-semibold">{JUDGING_UNAVAILABLE_MESSAGE}</p>
+          <p className="mt-2">
+            Everything else works normally: teams can submit, and you can manage cohorts, access
+            codes and submissions. Nothing is lost by waiting.
+          </p>
+        </Alert>
+      </div>
+    );
+  }
 
   const [stats, flags, submissions] = await Promise.all([
     store.assessment.getQueueStats(cohort.id),
@@ -61,6 +85,35 @@ export default async function JudgingPage() {
   ]);
 
   const window = evaluateShortlistWindow(cohort.day13DeadlineAt, stats.projectedCompletionAt);
+
+  /**
+   * Has anything actually picked this work up?
+   *
+   * The repository being available is not the same as a worker existing. With
+   * jobs queued and nothing claimed, the honest reading is "nothing is running"
+   * — and an operator who believes judging is progressing when it is not will
+   * discover it at the deadline rather than now.
+   *
+   * Derived from the queue itself rather than a worker registry: a job that has
+   * ever been claimed has a started_at, so "queued but never started" is
+   * exactly the condition worth surfacing.
+   */
+  const nothingStarted = stats.total > 0 && stats.byStage.queued === stats.total;
+
+  /**
+   * What the AI configuration actually means for this operator.
+   *
+   * "A key exists" is the wrong question. What matters is whether pressing
+   * *Start judging* on this cohort will produce real results — and there are
+   * four different answers, which is why this is not a boolean.
+   */
+  const provider = describeProviderStatus({
+    provider: env.AI_PROVIDER,
+    model: env.AI_MODEL,
+    hasApiKey: Boolean(env.AI_API_KEY),
+    evaluationMode: env.AI_EVALUATION_MODE,
+    demoMode: env.DEMO_MODE,
+  });
   const resolved = stats.completed + stats.failed + stats.manualReview;
   const openFlags = flags.filter((f) => f.status === 'open');
   const failed = submissions.filter((s) => s.stage === 'failed');
@@ -74,6 +127,29 @@ export default async function JudgingPage() {
         description="Track automated product testing, evidence review and cases that need human attention."
         actions={<Badge tone={cohort.status === 'judging' ? 'accent' : 'neutral'}>{cohort.status}</Badge>}
       />
+
+      <Alert tone={provider.tone} title={provider.label} className="mb-8" testId="provider-status">
+        <p>{provider.detail}</p>
+        {!provider.canJudgeRealCohort && (
+          <p className="mt-2 font-semibold">
+            Real learner submissions will not be sent to an AI provider in this configuration.
+          </p>
+        )}
+      </Alert>
+
+      {nothingStarted && (
+        <Alert tone="warning" title="Nothing is processing this queue" className="mb-8" testId="no-worker">
+          <p>
+            {stats.total} submission{stats.total === 1 ? ' is' : 's are'} queued and none has been
+            picked up. Judging does not run inside this application — a separate worker process
+            claims the queue, and it will not start without a database and an AI provider
+            configured.
+          </p>
+          <p className="mt-2">
+            Queued work is safe and nothing is lost. It stays here until a worker starts.
+          </p>
+        </Alert>
+      )}
 
       <Alert tone={window.onTrack ? 'success' : 'warning'} title="Shortlist window" className="mb-8">
         {window.label} Private shortlist due{' '}

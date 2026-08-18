@@ -42,7 +42,9 @@ It does not pick winners. It produces a private top 10; humans choose four.
 
 - No participant-facing results, scores, ranking, or feedback surface. Feedback reports are generated and stored privately, exposed to nobody outside admin.
 - No public leaderboard, announcement, or notification system.
-- No participant accounts, signup, or password reset. Access is an invite token.
+- No participant accounts, signup, or password reset. Access is a group number plus a shared team access code.
+- No integration with Circle or any other community platform. The submission URL is pasted into Circle by hand, and no code in this system knows Circle exists (ADR-026).
+- No per-member login. Everyone on a team edits the same entry under the same code.
 - No admin signup or multi-user admin roles. One shared account.
 - No mobile-native app testing, browser-extension testing, or hardware testing — these route to manual review.
 - No paid queue infrastructure. Postgres `FOR UPDATE SKIP LOCKED` is the queue.
@@ -53,7 +55,7 @@ It does not pick winners. It produces a private top 10; humans choose four.
 
 | User | Access | Needs |
 | --- | --- | --- |
-| **Participant (team)** | One invite link per team, no account | Understand the rules and deadline, submit once, correct mistakes before the deadline, know their submission landed |
+| **Participant (team)** | One common URL, a group number and a shared team access code, no account | Understand the rules and deadline, submit once, edit alongside their teammates, correct mistakes before the deadline, know their submission landed |
 | **Outskill internal team** | One shared admin account | Configure the cohort, watch the queue, inspect evidence, correct the machine, choose four winners, defend the outcome |
 | **Assessment worker** | Service credentials, no UI | Claim jobs, drive browsers safely, record evidence |
 
@@ -63,19 +65,27 @@ Shared admin access is a deliberate simplification with a known cost: audit entr
 
 ### 5.1 Access
 
-Admin imports teams by CSV, the system generates a cryptographically random invite token per team, stores only its hash, and produces a CSV of group number + lead email + invite URL for distribution. Tokens are revocable and regenerable.
+Every team in production uses the **same URL** — `/submit` — and identifies itself with two things Outskill issues: a **group number** and a **shared team access code**. There is no account, no password and no signup.
 
-Participants land on `/submit/[token]`. No login, no password, no account.
+Outskill pastes that one URL into Circle by hand. There is deliberately no Circle integration, no iframe and no API in either direction: this platform knows nothing about where a learner arrived from, and nothing in the submission flow depends on another product being available (ADR-026). A per-team URL was rejected because the first team to forward or screenshot theirs hands its submission to everyone reading (ADR-027).
+
+Access codes are twelve characters from a thirty-character alphabet with the misread characters removed — no `O`, `0`, `I`, `1`, `L` or `U` — grouped for reading aloud as `ABCD-EFGH-JKMN`. They are hashed with Argon2id and shown exactly once, at generation. Nothing can retrieve one afterwards, including an admin: a lost code is replaced, never resent. Codes are versioned, so regenerating one invalidates every session opened under the old code in a single write.
+
+Verification is rate limited to eight attempts per fifteen minutes per hashed IP **and** group number, with a fifteen-minute lockout an admin can clear immediately. Keying on both means one hostile client cannot lock out a legitimate team, and one team fumbling its code cannot lock out an office behind a shared address. Every failure — unknown group, wrong code, revoked code, withdrawn team — returns one identical message, so the form cannot be used to discover which group numbers exist.
+
+Entry is two steps: verify the code, then say who is editing. The name is an **activity label, not verified identity** — anyone holding the shared code can type anything, and nothing security-relevant depends on it (ADR-029). Between the two steps the verified team is carried in an HttpOnly cookie holding a short-lived signed assertion, never a bare team id (ADR-028). After that the team holds an opaque session cookie scoped to `/submit`; the access code itself never travels again, and never appears in a URL, in history, in logs, or in client-side storage.
+
+The per-team invite route `/submit/[token]` still exists for the demo fixtures and for any invite distributed before the common entry existed. No production team needs one.
 
 ### 5.2 What a participant can see
 
-Cohort name and instructions; the deadline in their own local time alongside IST; the approved product ideas for their cohort; the public rubric categories and weights; a download link for the pitch-deck template; their own draft; and, after submitting, their own receipt.
+Cohort name and instructions; the deadline in their own local time alongside IST; the approved product ideas for their cohort; the public rubric categories and weights; a download link for the pitch-deck template; the two-day submission guide; their own draft; a learner-safe record of what their teammates have been doing; and, after submitting, their own receipt on screen and as a PDF.
 
 ### 5.3 What a participant can never see
 
 Any other team; internal test plans; browser evidence; category or total scores; confidence; ranking; the top 10; internal or participant feedback reports; disqualification discussion; the final-four workspace; AI prompts; anti-gaming rules.
 
-This is enforced structurally — the participant route resolves a token to exactly one submission and the query layer has no path from a participant session to assessment tables — not by hiding UI.
+This is enforced structurally — every participant route resolves the session cookie server-side to exactly one submission, no request carries a submission or team id that is trusted, and the query layer has no path from a participant session to assessment tables — not by hiding UI.
 
 ### 5.4 The form
 
@@ -91,6 +101,29 @@ Six autosaving steps, then a review-and-confirm gate.
 | 6. Declarations | Seven required declarations including consent for the automated judge to create/edit/delete demo data | All must be affirmatively checked |
 
 Drafts autosave. Teams may edit freely while the cohort is open. **Final Submit** requires passing full validation and typing `FINAL SUBMIT`, then stamps `submitted_at`, issues a receipt ID, and locks learner editing. An admin can reopen a submission; reopening is audit-logged and visible to the team.
+
+**Any member with the code may edit, and everyone edits the same entry.** Two people working at once is the normal case on Day 13, so writes are not last-write-wins: every save carries the version the client read, and a write that is behind is refused with a plain explanation rather than allowed to overwrite a teammate silently (ADR-030). The team sees a small activity panel — who opened the submission, who saved which section, who uploaded the deck, who saved the demo link, who opened the review, who made the final submission. That is the complete set, and it is separate from the internal audit log, which a learner never sees.
+
+**Final Submit produces a receipt** on screen and as a downloadable PDF. The PDF is generated in-process — no external or paid service sees a participant's details — and carries the cohort, group number, product, idea, who submitted, when, and the receipt ID. It carries no access code, no credentials and no internal identifiers, and a safety assertion refuses to produce one that does. A team quoting its receipt ID in a support message is enough for an admin to find the submission.
+
+### 5.5 The submission window
+
+Whether a team may write is decided from the **server clock on every write** — every draft save, upload, removal and final submit. A browser clock is never an input, and correctness never depends on a scheduled job having run (ADR-031): a cohort still marked open past its deadline stops accepting writes at the deadline, whatever any scheduler did or did not do.
+
+Outskill can:
+
+- let the deadline close the window automatically;
+- **close early**, guarded by a typed confirmation, because that is the moment several hundred teams lose the ability to edit;
+- **pause**, which leaves teams able to read their entry but not change it;
+- **reopen**, with a recorded reason.
+
+Reopening after the official deadline **requires** either a new deadline or an explicit acceptance-until time. Without one the cohort would read as open while rejecting every save, which is the most confusing state this system could present to a team that has just been told they may resubmit.
+
+### 5.6 The two-day guide
+
+A written guide to Days 12 and 13 — what to build, what to prepare, how to submit, and what to do when something goes wrong — at `/submit/guide`, with a PDF at `/api/guide`. Both are built from one source, so a team working from the printout and a team working from the screen follow identical instructions.
+
+It is readable **without signing in**: a team looking it up at 2am should not have to find their access code first, and there is nothing in it worth protecting. It is deliberately silent about how anything is scored beyond the public category weights. The admin playbook stays admin-only.
 
 ## 6. Assessment
 
@@ -152,6 +185,12 @@ Explicitly never for: weak UI, a low score, a secondary feature failing, a missi
 
 Every disqualification carries a reason, evidence, admin visibility, a reversible status, and an audit entry.
 
+### 6.8 Idea definitions are approved before they judge anyone
+
+An idea's **title and description** come from the approved source catalogue and are always usable. Everything else on it — the minimum core flow, the expected entities, the AI opportunity, the allowed scope, the unsafe interpretations, the target user, the expected use case — is Outskill's own interpretation, written in this product, and it is what test-plan generation reads.
+
+So an expanded definition starts as a `draft` and influences real judging only once a person has read it and approved it (ADR-025). Editing any expanded field returns it to draft automatically, because approval is of a specific wording, not of an idea in general.
+
 ## 7. Reports
 
 **Internal report** (admin only): compliance, preflight results, test plan, browser evidence with screenshots, bugs found, scores with confidence, rank, risks, flags, model and prompt versions, and internal notes.
@@ -161,6 +200,8 @@ Every disqualification carries a reason, evidence, admin visibility, a reversibl
 ## 8. Demo mode
 
 `DEMO_MODE=1` runs the entire platform locally with no AI key, no Supabase project, and no deployed worker. Deterministic fixtures produce a full cohort: six synthetic teams and submissions covering complete, incomplete, inaccessible, login-required, manual-review and low-confidence cases, with realistic evidence, stable scores, a ranking, and four empty final-selection slots. No historical identity appears anywhere.
+
+The root page differs by mode, deliberately. In production it is a minimal landing page: a **Start your submission** call to action pointing at `/submit`, a link to the two-day guide, a plain statement of what a team needs, and a restrained Outskill sign-in link. The exploratory demo home — scenario cards, seeded links, demo credentials — appears only when `DEMO_MODE=1`. Demo mode is also the only place a plaintext access code is ever displayed, because the memory driver generated the fixture codes itself; real codes exist as Argon2id hashes only.
 
 ## 9. Scale and cost
 
@@ -176,4 +217,6 @@ The build is acceptable when all twenty criteria from the brief hold. They are t
 
 ## 12. Open items requiring Outskill input
 
-None are blocking. Recorded in `docs/reference-analysis.md` §7: real brand green, deck-template file size, playbook revision (still says three days), and a curriculum review of our extended idea definitions.
+None are blocking. Recorded in `docs/reference-analysis.md` §7: real brand green, deck-template file size, playbook revision (still says three days), and a curriculum review of our extended idea definitions — which is the same review the approval gate in §6.8 asks for, and until it happens those definitions sit in draft.
+
+One operational item belongs to Outskill by design: **somebody has to paste the submission URL into Circle**, and somebody has to hand each team its group number and access code. Both are manual because there is no integration and no email (ADR-024, ADR-026), so both need an owner.

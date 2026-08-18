@@ -7,7 +7,7 @@ import {
   evaluateDeadline,
   formatInTimezone,
 } from '@ohj/shared';
-import { getDemoStore, getStore, isDemo } from '@/lib/store';
+import { getDemoStore, getStoreAsync, isDemo } from '@/lib/store';
 import { Badge, Card, Wordmark } from '@/components/ui';
 
 export const dynamic = 'force-dynamic';
@@ -49,7 +49,7 @@ function ProductionHome() {
       </header>
 
       <main id="main" className="mx-auto max-w-5xl px-6 py-20 sm:py-28">
-        <p className="text-xs font-bold uppercase tracking-[0.18em] text-brand">
+        <p className="text-xs font-bold uppercase tracking-[0.18em] text-brand-text">
           AI Accelerator Hackathon
         </p>
         <h1 className="mt-4 max-w-3xl text-4xl font-bold leading-[1.05] text-ink sm:text-6xl">
@@ -60,15 +60,32 @@ function ProductionHome() {
           Hackathon.
         </p>
 
+        <div className="mt-10 flex flex-wrap items-center gap-4">
+          <Link
+            href="/submit"
+            className="rounded-[10px] bg-brand px-6 py-3 text-base font-bold text-on-accent transition-colors hover:bg-brand-hover"
+            data-testid="start-submission"
+          >
+            Start your submission
+          </Link>
+          <Link
+            href="/submit/guide"
+            className="text-base font-semibold text-brand-text underline underline-offset-4"
+          >
+            Read the two-day guide
+          </Link>
+        </div>
+
         <Card tone="raised" className="mt-12 max-w-2xl">
-          <h2 className="text-lg font-bold text-ink">Finding your submission</h2>
+          <h2 className="text-lg font-bold text-ink">What you need</h2>
           <p className="mt-2 text-sm text-muted">
-            You will access your submission through the private team link shared by Outskill. There
-            is no account to create and no password to remember — the link is your team&apos;s way
-            in.
+            Your group number and your team access code. Outskill gives both to every team, and any
+            member can use them — you all edit the same submission.
           </p>
           <p className="mt-4 text-sm text-muted">
-            Cannot find your link? Ask your team lead first, then contact the Outskill team.
+            There is no account to create and no password to remember. Cannot find your code? Ask
+            your team lead first, then contact the Outskill team — codes cannot be looked up, so
+            they will issue your team a new one.
           </p>
         </Card>
 
@@ -100,7 +117,7 @@ function ProductionHome() {
 // --------------------------------------------------------------------------
 
 async function DemoHome() {
-  const store = getStore();
+  const store = await getStoreAsync();
   const demo = getDemoStore();
   const cohort = (await store.cohorts.listCohorts())[0];
   const submissions = cohort ? await store.submissions.listSubmissions(cohort.id) : [];
@@ -132,7 +149,7 @@ async function DemoHome() {
       </header>
 
       <main id="main" className="mx-auto max-w-6xl px-6 py-12">
-        <p className="text-xs font-bold uppercase tracking-[0.18em] text-brand">
+        <p className="text-xs font-bold uppercase tracking-[0.18em] text-brand-text">
           AI Accelerator Hackathon
         </p>
         <h1 className="mt-3 max-w-3xl text-3xl font-bold leading-tight text-ink sm:text-5xl">
@@ -152,7 +169,7 @@ async function DemoHome() {
                 timeStyle: 'short',
               })}
             </span>{' '}
-            · <span className="text-brand">{deadline.remainingLabel} remaining</span>
+            · <span className="text-brand-text">{deadline.remainingLabel} remaining</span>
           </p>
         )}
 
@@ -170,7 +187,7 @@ async function DemoHome() {
               {previewToken ? (
                 <Link
                   href={`/submit/${previewToken}`}
-                  className="inline-flex items-center gap-2 rounded-[10px] bg-brand px-6 py-3 text-base font-bold text-black transition-colors hover:bg-brand-hover"
+                  className="inline-flex items-center gap-2 rounded-[10px] bg-brand px-6 py-3 text-base font-bold text-on-accent transition-colors hover:bg-brand-hover"
                 >
                   Preview learner journey →
                 </Link>
@@ -211,7 +228,7 @@ async function DemoHome() {
             Six demo teams, six situations
           </h2>
           <p className="mt-2 max-w-2xl text-sm text-muted">
-            Each card opens a real invite link backed by the demo fixtures. Nothing here is
+            Each card opens a demo team directly, backed by the demo fixtures. Nothing here is
             hard-coded markup.
           </p>
 
@@ -251,7 +268,7 @@ async function DemoHome() {
                       {scenario.token ? (
                         <Link
                           href={`/submit/${scenario.token}`}
-                          className="inline-flex items-center rounded-[10px] bg-brand px-3.5 py-2 text-sm font-bold text-black transition-colors hover:bg-brand-hover"
+                          className="inline-flex items-center rounded-[10px] bg-brand px-3.5 py-2 text-sm font-bold text-on-accent transition-colors hover:bg-brand-hover"
                         >
                           Open learner portal
                         </Link>

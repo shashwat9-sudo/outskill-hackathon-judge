@@ -9,32 +9,35 @@ import { expect, test } from '@playwright/test';
  */
 
 test.describe('Outskill dark theme', () => {
-  test('applies the dark brand tokens on the root page', async ({ page }) => {
+  test('applies the dark design-system tokens on the root page', async ({ page }) => {
     await page.goto('/');
 
     const tokens = await page.evaluate(() => {
       const style = getComputedStyle(document.documentElement);
+      const read = (name: string) => style.getPropertyValue(name).trim().toLowerCase();
       return {
-        background: style.getPropertyValue('--brand-background').trim(),
-        accent: style.getPropertyValue('--brand-accent').trim(),
-        text: style.getPropertyValue('--brand-text').trim(),
-        surface: style.getPropertyValue('--brand-surface').trim(),
-        border: style.getPropertyValue('--brand-border').trim(),
+        background: read('--bg'),
+        accent: read('--accent'),
+        accentText: read('--accent-text'),
+        text: read('--text'),
+        surface: read('--bg-card'),
+        border: read('--border'),
       };
     });
 
-    expect(tokens.background).toBe('#060806');
-    expect(tokens.accent).toBe('#c8ff38');
-    expect(tokens.text).toBe('#f4f7f1');
-    expect(tokens.surface).toBe('#10140e');
-    expect(tokens.border).toBe('#2a3326');
+    expect(tokens.background).toBe('#0a0a0b');
+    expect(tokens.accent).toBe('#ff5e3a');
+    expect(tokens.accentText).toBe('#ff5e3a');
+    expect(tokens.text).toBe('#fafafa');
+    expect(tokens.surface).toBe('#141418');
+    expect(tokens.border).toBe('#26262c');
   });
 
   test('paints a near-black page rather than a white admin tool', async ({ page }) => {
     await page.goto('/');
     const bodyBackground = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
-    // #060806
-    expect(bodyBackground).toBe('rgb(6, 8, 6)');
+    // #0A0A0B
+    expect(bodyBackground).toBe('rgb(10, 10, 11)');
   });
 
   test('keeps the dark theme on the learner portal', async ({ page }) => {
@@ -42,10 +45,10 @@ test.describe('Outskill dark theme', () => {
     await page.getByRole('link', { name: 'Open learner portal' }).first().click();
 
     const bodyBackground = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
-    expect(bodyBackground).toBe('rgb(6, 8, 6)');
+    expect(bodyBackground).toBe('rgb(10, 10, 11)');
   });
 
-  test('uses the lime accent on the primary call to action, with black text', async ({ page }) => {
+  test('uses the accent on the primary call to action, with warm ink', async ({ page }) => {
     await page.goto('/');
     const cta = page.getByRole('link', { name: /Preview learner journey/ });
     await expect(cta).toBeVisible();
@@ -55,8 +58,42 @@ test.describe('Outskill dark theme', () => {
       return { background: computed.backgroundColor, color: computed.color };
     });
 
-    expect(styles.background).toBe('rgb(200, 255, 56)'); // #c8ff38
-    expect(styles.color).toBe('rgb(0, 0, 0)');
+    expect(styles.background).toBe('rgb(255, 94, 58)'); // #FF5E3A
+    // #1A0A00, never white and never plain black: the design system's rule for
+    // anything sitting on an orange fill.
+    expect(styles.color).toBe('rgb(26, 10, 0)');
+  });
+
+  test('serves a light theme when the host asks for one', async ({ page }) => {
+    // No toggle ships here. The main Outskill site sets `data-theme`, and this
+    // proves the tokens respond when it does.
+    await page.goto('/');
+    await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'light'));
+
+    const light = await page.evaluate(() => {
+      const style = getComputedStyle(document.documentElement);
+      return {
+        bg: style.getPropertyValue('--bg').trim().toLowerCase(),
+        text: style.getPropertyValue('--text').trim().toLowerCase(),
+        // Orange as text darkens, or it fails AA on white.
+        accentText: style.getPropertyValue('--accent-text').trim().toLowerCase(),
+        accent: style.getPropertyValue('--accent').trim().toLowerCase(),
+      };
+    });
+
+    expect(light.bg).toBe('#fafafa');
+    expect(light.text).toBe('#18181b');
+    expect(light.accentText).toBe('#c9391a');
+    // The brand colour itself does not move between themes.
+    expect(light.accent).toBe('#ff5e3a');
+  });
+
+  test('keeps no trace of the lime it replaced', async ({ page }) => {
+    await page.goto('/');
+    const html = await page.content();
+    for (const dead of ['#c8ff38', '#b7ee2f', '200, 255, 56', '#060806', '#10140e']) {
+      expect(html, `the old palette survives: ${dead}`).not.toContain(dead);
+    }
   });
 
   test('does not use default Tailwind blue for ordinary UI', async ({ page }) => {

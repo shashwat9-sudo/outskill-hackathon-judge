@@ -14,6 +14,7 @@ import { lookup } from 'node:dns/promises';
 import {
   assertResolvedAddressesSafe,
   validateProductUrl,
+  validateUrl,
   type FailureClass,
   type PreflightStatus,
 } from '@ohj/shared';
@@ -64,10 +65,28 @@ const defaultResolver: Resolver = async (hostname) => {
 
 export async function runPreflight(
   input: PreflightInput,
-  options: { resolver?: Resolver; fetchImpl?: typeof fetch } = {},
+  options: {
+    resolver?: Resolver;
+    fetchImpl?: typeof fetch;
+    /**
+     * Permit a product served from this machine.
+     *
+     * OFF by default and never set by the worker. It exists for one caller:
+     * the controlled judging run, whose product under test is a fixture server
+     * on 127.0.0.1. Without it that run cannot reach its own fixture, and the
+     * only alternative is to stop exercising preflight at all.
+     *
+     * It relaxes exactly two rules — the HTTPS/port requirement and the
+     * private-address gate — and nothing else. Every other check runs
+     * unchanged. `worker-security.test.ts` asserts the production path never
+     * passes it.
+     */
+    allowPrivateProductUrlForControlledRun?: boolean;
+  } = {},
 ): Promise<PreflightOutcome> {
   const resolver = options.resolver ?? defaultResolver;
   const doFetch = options.fetchImpl ?? fetch;
+  const controlledRun = options.allowPrivateProductUrlForControlledRun === true;
   const timeoutMs = input.timeoutMs ?? 15_000;
   const checks: PreflightCheckResult[] = [];
   const at = () => new Date();
@@ -170,7 +189,9 @@ export async function runPreflight(
     return finish(checks, { canProceed: false, needsManualReview: false, manualReviewReason: null });
   }
 
-  const validation = validateProductUrl(input.productUrl);
+  const validation = controlledRun
+    ? validateUrl(input.productUrl, { requireHttps: false, allowPrivateAddress: true })
+    : validateProductUrl(input.productUrl);
   if (!validation.ok) {
     record('url_valid', 'fail', { message: validation.message, code: validation.code }, 'invalid');
     return finish(checks, { canProceed: false, needsManualReview: false, manualReviewReason: null });
@@ -197,7 +218,9 @@ export async function runPreflight(
   // ---- SSRF gate ---------------------------------------------------------
 
   const { hostname } = new URL(validation.normalised as string);
-  const resolved = await assertResolvedAddressesSafe(hostname, resolver);
+  const resolved = controlledRun
+    ? { safe: true, addresses: ['127.0.0.1'], reason: null }
+    : await assertResolvedAddressesSafe(hostname, resolver);
 
   if (!resolved.safe) {
     const isDnsFailure = resolved.reason?.includes('DNS resolution failed') ?? false;

@@ -2,14 +2,22 @@
 
 **Nothing in this document has been executed.** No infrastructure has been created, no service has been deployed, and no production data exists. Deployment requires explicit approval from Outskill.
 
+Three steps in here are **user-gated checkpoints** — they cost money or touch production, so the build stops in front of each one and waits for a person to say go:
+
+1. **Creating the Supabase project** and applying migrations (§4).
+2. **Obtaining an AI provider account and key** (§2).
+3. **Deploying anything** — web app or worker (§5, §6).
+
+Everything before those gates is finished and verifiable locally. Nothing after them has been started.
+
 ---
 
 ## 1. What runs where
 
 | Component | Runtime | Notes |
 | --- | --- | --- |
-| `apps/web` | Node 20+ | Participant portal and admin dashboard |
-| `apps/worker` | Node 20+ **with Chromium** | Drives untrusted participant websites |
+| `apps/web` | Node 20+ | Participant portal and admin dashboard. Health at `/api/health` |
+| `apps/worker` | Node 20+ **with Chromium**, from `apps/worker/Dockerfile` | Drives untrusted participant websites. Liveness at `/healthz`, readiness at `/readyz`, on `WORKER_HEALTH_PORT` (default 8080, container-internal) |
 | PostgreSQL | Supabase | Also the assessment queue |
 | Storage | Supabase Storage | Six private buckets |
 
@@ -17,14 +25,14 @@
 
 ---
 
-## 2. Prerequisites (require approval — each costs money)
+## 2. Prerequisites (user-gated — each costs money)
 
 1. A Supabase project (Postgres + Storage).
 2. A host for `apps/web`.
 3. A container host for `apps/worker` that can run Chromium and supports an egress network policy.
 4. An AI provider account and key.
 
-None of these have been created. Each is a paid resource and needs sign-off.
+None of these have been created. Each is a paid resource, each is a checkpoint, and none of them is taken without explicit sign-off.
 
 ---
 
@@ -55,10 +63,11 @@ supabase link --project-ref <ref>
 supabase db push          # applies supabase/migrations/*.sql in order
 ```
 
-Three migrations:
+Four migrations:
 1. `0001_schema.sql` — 34 tables, constraints, indexes
 2. `0002_rls.sql` — row-level security for the three roles
 3. `0003_storage.sql` — six private buckets and their policies
+4. `0004_production_entry.sql` — `team_access_codes`, `participant_sessions`, `team_activity`, `verification_attempts`; submission versioning; cohort closure and reopening columns; idea-definition approval. Forward-only, and it drops or rewrites nothing.
 
 ### Verify before going further
 
@@ -83,6 +92,16 @@ select tablename, count(*) from pg_policies
    )
  group by 1;
 -- Expect ZERO ROWS. Any row here is a privacy defect — stop and fix it.
+
+-- The same check for the entry tables. A participant role that could read
+-- team_access_codes could enumerate every group in the cohort.
+select tablename, cmd from pg_policies
+ where schemaname = 'public'
+   and 'ohj_participant' = any(roles)
+   and tablename in (
+     'team_access_codes','participant_sessions','verification_attempts','team_activity'
+   );
+-- Expect exactly ONE row: a SELECT policy on team_activity. Nothing else.
 ```
 
 ---
@@ -95,11 +114,25 @@ npm run build
 npm run start --workspace=@ohj/web
 ```
 
-Required environment: `DEMO_MODE=0`, `NODE_ENV=production`, `APP_BASE_URL`, `ADMIN_SEED_USERNAME`, `ADMIN_SEED_PASSWORD`, `ADMIN_SESSION_SECRET`, `CREDENTIAL_ENCRYPTION_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `DATABASE_URL`.
+Required environment: `DEMO_MODE=0`, `NODE_ENV=production`, `APP_BASE_URL`, `ADMIN_SEED_USERNAME`, `ADMIN_SEED_PASSWORD`, `ADMIN_SESSION_SECRET`, `CREDENTIAL_ENCRYPTION_KEY`, `SUPABASE_URL`, `SUPABASE_SECRET_KEY` (or the legacy `SUPABASE_SERVICE_ROLE_KEY`), `DATABASE_URL`, `AI_PROVIDER`, `AI_MODEL`, `AI_API_KEY`, `AI_EVALUATION_MODE`.
 
-**HTTPS is mandatory.** Session cookies are set `Secure` in production and will not survive a plain-HTTP origin.
+Startup refuses to proceed without `ADMIN_SESSION_SECRET` (32+ characters), `CREDENTIAL_ENCRYPTION_KEY`, and either `DATABASE_URL` or `SUPABASE_URL` whenever `DEMO_MODE` is off — and without `AI_API_KEY` whenever `AI_PROVIDER` is anything but `demo`.
 
-`SUPABASE_SERVICE_ROLE_KEY` is server-side only. It must never be prefixed `NEXT_PUBLIC_` and must never reach the browser.
+`ADMIN_SESSION_SECRET` carries more weight than its name suggests. It signs admin sessions, and it also signs the ten-minute verification handle that carries a verified team between the two entry steps, and keys the hash of participant session tokens. Rotating it signs everyone out, admin and learner alike, which is a legitimate emergency action and a bad accident.
+
+`APP_BASE_URL` is what the access-code sheet and the guide PDF print as the submission address. If it is wrong, the URL Outskill pastes into Circle is wrong.
+
+**HTTPS is mandatory.** Session cookies are set `Secure` in production and will not survive a plain-HTTP origin. That applies to the participant cookie as much as the admin one.
+
+`SUPABASE_SECRET_KEY` (and the legacy `SUPABASE_SERVICE_ROLE_KEY`) are server-side only. Neither may be prefixed `NEXT_PUBLIC_` and neither may reach the browser.
+
+`AI_EVALUATION_MODE` defaults to `synthetic_only`, which refuses to send real learner work to an AI provider. Production judging requires setting it to `production` deliberately.
+
+### Health
+
+`GET /api/health` returns 200 with `{"status":"ok","checks":{"config":"ok","store":"ok"}}` when the process can actually serve a learner, and 503 with `degraded` when it cannot. The store check is a real read, not a ping — a store that constructs and then cannot answer is the failure worth catching.
+
+Point the load balancer at it. It is unauthenticated and deliberately says nothing else: no version, no hostname, no environment variable, no database URL, no counts.
 
 ---
 
@@ -107,16 +140,31 @@ Required environment: `DEMO_MODE=0`, `NODE_ENV=production`, `APP_BASE_URL`, `ADM
 
 The worker visits URLs chosen by the people being judged. Treat its host as untrusted-adjacent.
 
-```dockerfile
-FROM mcr.microsoft.com/playwright:v1.49.0-jammy
-WORKDIR /app
-COPY package*.json ./
-COPY packages ./packages
-COPY apps/worker ./apps/worker
-RUN npm ci --omit=dev
-USER pwuser
-CMD ["npm", "run", "start", "--workspace=@ohj/worker"]
+The image is `apps/worker/Dockerfile` — build it, do not hand-write one:
+
+```bash
+docker build -f apps/worker/Dockerfile -t ohj-worker .
 ```
+
+It builds from `mcr.microsoft.com/playwright:v1.62.1-noble` and runs as the non-root `pwuser`. Two things about that tag matter:
+
+- It must match the **resolved** Playwright version, not the range in `package.json`. The base image bundles specific browser builds, and a client/browser mismatch fails at runtime rather than at build time — the worst kind to discover in production. Check with `npm ls playwright` before changing either.
+- Bumping Playwright means bumping the tag in the same commit.
+
+The build context is the repository root, because `npm ci --workspace` still needs the full lockfile.
+
+### Worker health
+
+The worker serves two routes on `WORKER_HEALTH_PORT` (default 8080). Keep the port container-internal; there is nothing on it for the internet.
+
+| Route | Meaning | Probe |
+| --- | --- | --- |
+| `/healthz` | Liveness. 200 while the process answers. | Restart probe. The image's `HEALTHCHECK` uses this. |
+| `/readyz` | Readiness. 200 when the polling loop ran recently and is not draining; 503 with `stalled` or `draining` otherwise, plus `quietForSeconds` and `inFlight`. | Traffic/scheduling probe **only**. |
+
+**Do not point a restart probe at `/readyz`.** A worker in the middle of a browser run is *busy*, not stalled, and killing it there loses someone's assessment. That is why liveness ignores staleness entirely, and why the staleness limit for readiness is derived from the poll interval and the browser budget rather than fixed.
+
+`SIGTERM` starts a graceful drain: readiness fails immediately so nothing new is scheduled, liveness stays up while in-flight assessments finish, and the process exits when the loop stops.
 
 ### Required: network egress policy
 
@@ -154,11 +202,16 @@ At 500 submissions with an eight-minute budget, concurrency 8 is roughly nine ho
 
 - [ ] `npm run verify` passes (lint, typecheck, unit + integration, build)
 - [ ] `npm run test:e2e` passes
-- [ ] Migrations applied and the three verification queries return the expected results
+- [ ] Migrations applied and the verification queries return the expected results
 - [ ] `select count(*) from pg_policies where 'ohj_participant' = any(roles) and tablename in (assessment tables)` returns **zero**
+- [ ] The entry-table policy query returns exactly one row: SELECT on `team_activity`
 - [ ] All six buckets are private (`select id, public from storage.buckets` — every row false)
 - [ ] Secrets generated on a trusted machine and stored in a secrets manager
 - [ ] `CREDENTIAL_ENCRYPTION_KEY` backed up
+- [ ] `APP_BASE_URL` is the real public origin — it is the URL printed on the code sheet and in the guide
+- [ ] `/api/health` returns 200 from outside, and 503 if the database is stopped
+- [ ] Worker `/healthz` and `/readyz` reachable inside the container; the restart probe points at `/healthz` only
+- [ ] Worker image tag matches `npm ls playwright`
 - [ ] Worker egress policy applied **and tested** — from inside the container, confirm `curl http://169.254.169.254` fails
 - [ ] Worker holds no admin session secret
 - [ ] HTTPS enforced on the web app
@@ -170,14 +223,20 @@ At 500 submissions with an eight-minute budget, concurrency 8 is roughly nine ho
 
 ## 8. Post-deployment verification
 
-1. Sign in to `/admin`. Confirm *Runtime configuration* shows demo mode off and the postgres driver.
-2. Create a throwaway cohort, import one team, open the invite link.
-3. Confirm the participant page shows the rubric and the deadline — and no score, rank or shortlist.
-4. Submit a test entry and confirm it locks and issues a receipt.
-5. Queue it and confirm the worker claims it within a poll interval.
-6. Confirm evidence, scores and a ranking appear in the admin dashboard.
-7. From a browser with no admin session, request `/admin/ranking` and confirm the redirect carries no state.
-8. Delete the throwaway cohort.
+1. `curl https://<app>/api/health` returns 200 and `"status":"ok"`.
+2. Sign in to `/admin`. Confirm *Runtime configuration* shows demo mode off and the postgres driver.
+3. Create a throwaway cohort, import one team, issue an access code and download the sheet.
+4. Open `/submit` in a clean browser. Confirm the URL contains no team identifier, enter the group number and code, then a name.
+5. Enter a **wrong** code for a group that does not exist and confirm the message is identical to the wrong-code message.
+6. Confirm the participant page shows the rubric and the deadline — and no score, rank or shortlist.
+7. Submit a test entry, confirm it locks, and download the receipt PDF. Check it carries no code and no credential.
+8. Look the submission up by its receipt ID from the Overview page.
+9. Confirm `/submit/guide` and `/api/guide` load without a session.
+10. Queue it and confirm the worker claims it within a poll interval, and that `/readyz` reports ready.
+11. Confirm evidence, scores and a ranking appear in the admin dashboard.
+12. From a browser with no admin session, request `/admin/ranking` and confirm the redirect carries no state.
+13. Revoke the test team's access code and confirm the open session is signed out.
+14. Delete the throwaway cohort.
 
 ---
 
@@ -204,16 +263,19 @@ The deletion job runs **only** when `NODE_ENV=production` and `DEMO_MODE=0` (ADR
 Watch, in priority order:
 
 1. **Queue depth vs the shortlist deadline** — the only metric that matters on the night.
-2. Worker liveness — leases expiring without heartbeats means a worker is dying.
-3. Failed-stage rate — a spike usually means a network or provider problem, not 400 bad products.
-4. AI call count and token usage — reported as raw counts; apply your own rate.
-5. Admin login failures — a spike is worth a look.
+2. `/api/health` — a 503 during the submission window means teams cannot submit.
+3. Worker `/readyz` — `stalled` means the loop is wedged; `draining` during a deploy is expected.
+4. Worker liveness — leases expiring without heartbeats means a worker is dying.
+5. Failed-stage rate — a spike usually means a network or provider problem, not 400 bad products.
+6. AI call count and token usage — reported as raw counts; apply your own rate.
+7. Admin login failures — a spike is worth a look.
+8. Verification lockouts during the submission window. A handful is normal. A cluster on one address usually means a NAT and a confused team, not an attack — and either way, clearing it takes seconds.
 
 ---
 
 ## 12. Open items before a production run
 
-1. The postgres driver is specified and the schema is in place, but the worker currently refuses to start with `DEMO_MODE=0` rather than silently assessing fixtures. Wire and test the driver before a real cohort.
+1. The postgres driver is specified and the schema is in place, but it is not wired. With `DEMO_MODE=0` the web app throws when it builds a store and the worker refuses to start, rather than either of them silently serving or assessing fixture data. Wire and test the driver before a real cohort; until then, `/api/health` in a `DEMO_MODE=0` deployment will report `degraded`, which is the honest answer.
 2. Confirm the AI provider and model, and freeze both for the cohort.
 3. Load-test the queue at cohort scale.
 4. Supply the real Outskill brand green (ADR-014).

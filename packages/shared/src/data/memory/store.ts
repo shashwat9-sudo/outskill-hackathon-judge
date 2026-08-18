@@ -15,9 +15,38 @@ import {
   hashInviteToken,
   serialiseEnvelope,
 } from '../../security/crypto';
+import {
+  GENERIC_VERIFICATION_ERROR,
+  clearVerificationAttempts,
+  evaluateVerificationAttempt,
+  generateAccessCode,
+  registerFailedVerification,
+  verifyAccessCode,
+} from '../../security/access-code';
+import {
+  computeSessionExpiry,
+  evaluateParticipantSession,
+  generateParticipantSessionToken,
+  hashParticipantSessionToken,
+} from '../../security/participant-session';
+import {
+  computeSubmissionWindow,
+  evaluateParticipantPermissions,
+  needsDeadlineReconciliation,
+  validateReopen,
+} from '../../domain/submission-window';
+import { checkVersion } from '../../domain/concurrency';
+import { MAX_DECK_BYTES, looksLikePdf, validateDeckUpload } from '../../schemas/submission';
+import { assessCohortDeletion, confirmationMatches } from '../../domain/cohort-deletion';
+import {
+  checkCohortExclusivity,
+  isLearnerFacing,
+  resolveLearnerFacingCohort,
+} from '../../domain/cohort-exclusivity';
 import { compareForRanking, type RankableSubmission } from '../../domain/ranking';
-import { canParticipantEdit, type AssessmentStage, type CohortStatus, type SubmissionStatus } from '../../domain/status';
+import { type AssessmentStage, type CohortStatus, type SubmissionStatus } from '../../domain/status';
 import { isSubmissionLate } from '../../domain/deadline';
+import { demoAccessCode } from '../../fixtures/demo';
 import { generateReceiptId, newId } from '../../domain/ids';
 import { assertDisqualificationAllowed } from '../../domain/disqualification';
 import type { RubricCategoryKey } from '../../rubric/index';
@@ -57,8 +86,16 @@ import type {
   TestPlanStep,
 } from '../types';
 import type {
+  AccessCodeStatus,
   AdminAuthStore,
   AssessmentStore,
+  CreatedSession,
+  CreateSessionInput,
+  FinaliseResult,
+  GeneratedAccessCodeRow,
+  ParticipantReceipt,
+  SaveDraftResult,
+  VerifyTeamResult,
   AuditStore,
   CohortStore,
   DataStore,
@@ -70,6 +107,7 @@ import type {
   SettingsStore,
   SubmissionListItem,
   SubmissionStore,
+  LearnerAllocationResult,
   TeamImportResult,
   TeamStore,
 } from '../store';
@@ -78,9 +116,43 @@ import { createEmptyDatabase, seedDemoDatabase, type MemoryDatabase } from './da
 const DEMO_KEY = Buffer.alloc(32, 7);
 const clone = <T>(value: T): T => structuredClone(value);
 
+/**
+ * The fields that make an idea's definition "expanded" rather than sourced.
+ *
+ * Title and description come from the approved idea catalogue. Everything here
+ * is Outskill's interpretation of what the idea means, and it is what test-plan
+ * generation reads — so it is what approval is about.
+ */
+const EXPANDED_DEFINITION_FIELDS = [
+  'targetUser',
+  'expectedUseCase',
+  'minimumCoreFlow',
+  'expectedEntities',
+  'aiOpportunity',
+  'allowedScope',
+  'unsafeInterpretations',
+] as const satisfies readonly (keyof CohortIdea)[];
+
+/** Would this patch change what judging measures against? */
+function changesExpandedDefinition(current: CohortIdea, patch: Partial<CohortIdea>): boolean {
+  return EXPANDED_DEFINITION_FIELDS.some(
+    (field) =>
+      field in patch && JSON.stringify(patch[field]) !== JSON.stringify(current[field]),
+  );
+}
+
 export class MemoryDataStore implements DataStore {
   readonly driver = 'memory' as const;
   private db: MemoryDatabase;
+
+  /**
+   * Access codes are Argon2id-hashed, which is asynchronous, but seeding the
+   * rest of the fixtures is not. Methods that touch codes or sessions await
+   * this once; everything else stays synchronous.
+   */
+  private ready: Promise<void>;
+  /** Keys the participant session hash. Demo-only value; production injects one. */
+  private readonly sessionSecret: string | undefined;
 
   participant: ParticipantStore;
   adminAuth: AdminAuthStore;
@@ -93,9 +165,11 @@ export class MemoryDataStore implements DataStore {
   audit: AuditStore;
   settings: SettingsStore;
 
-  constructor(options: { seed?: boolean } = {}) {
+  constructor(options: { seed?: boolean; sessionSecret?: string } = {}) {
     this.db = createEmptyDatabase();
+    this.sessionSecret = options.sessionSecret;
     if (options.seed !== false) seedDemoDatabase(this.db);
+    this.ready = options.seed === false ? Promise.resolve() : this.seedAccessCodes();
 
     this.participant = this.buildParticipantStore();
     this.adminAuth = this.buildAdminAuthStore();
@@ -112,6 +186,44 @@ export class MemoryDataStore implements DataStore {
   async reset(): Promise<void> {
     this.db = createEmptyDatabase();
     seedDemoDatabase(this.db);
+    this.ready = this.seedAccessCodes();
+    await this.ready;
+  }
+
+  /**
+   * Seed one access code per demo team.
+   *
+   * Deterministic per group number so the demo home can print working codes and
+   * an operator can exercise the real /submit verification path end to end.
+   */
+  private async seedAccessCodes(): Promise<void> {
+    const { hashPassword } = await import('../../security/password');
+    for (const team of this.db.teams) {
+      if (this.db.accessCodes.some((c) => c.teamId === team.id)) continue;
+      const plaintext = demoAccessCode(team.groupNumber);
+      this.db.accessCodes.push({
+        id: newId(),
+        teamId: team.id,
+        cohortId: team.cohortId,
+        groupNumber: team.groupNumber,
+        codeHash: await hashPassword(plaintext),
+        version: 1,
+        createdAt: team.importedAt,
+        revokedAt: null,
+        lastVerifiedAt: null,
+        verifyCount: 0,
+      });
+    }
+  }
+
+  /** Demo-only: the plaintext code for a team, so the demo can display it. */
+  getDemoAccessCode(groupNumber: number): string {
+    return demoAccessCode(groupNumber);
+  }
+
+  /** Await fixture readiness. Tests call this before asserting on codes. */
+  async whenReady(): Promise<void> {
+    await this.ready;
   }
 
   /** Demo-only helper: the working invite link for a team. */
@@ -127,35 +239,169 @@ export class MemoryDataStore implements DataStore {
     }));
   }
 
+  /**
+   * An invite that is still usable.
+   *
+   * Unknown, revoked and expired all return undefined, so no caller can tell
+   * them apart and accidentally turn one into a different error message.
+   */
+  private findLiveInvite(token: string): TeamInvite | undefined {
+    const hash = hashInviteToken(token);
+    const invite = this.db.teamInvites.find((i) => i.tokenHash === hash);
+    if (!invite || invite.revokedAt) return undefined;
+    if (invite.expiresAt && invite.expiresAt.getTime() < Date.now()) return undefined;
+    return invite;
+  }
+
   // ------------------------------------------------------------------------
   // Participant
   // ------------------------------------------------------------------------
 
+  /** Deck bytes uploaded during a demo run. Never persisted anywhere. */
+  private readonly demoDeckBytes = new Map<string, Uint8Array>();
+
   private buildParticipantStore(): ParticipantStore {
     const db = () => this.db;
 
+    /** Resolve a session token to its team, or null. Used by every write. */
+    const resolve = async (token: string) => {
+      await this.ready;
+      const hash = hashParticipantSessionToken(token, this.sessionSecret);
+      const session = db().participantSessions.find((s) => s.sessionTokenHash === hash);
+      if (!session) return null;
+
+      const code = db().accessCodes.find((c) => c.teamId === session.teamId && !c.revokedAt);
+      const validity = evaluateParticipantSession(session, code?.version ?? -1);
+      if (!validity.valid) return null;
+
+      const team = db().teams.find((t) => t.id === session.teamId);
+      const cohort = db().cohorts.find((c) => c.id === session.cohortId);
+      if (!team || !cohort) return null;
+
+      let submission = db().submissions.find((x) => x.teamId === team.id && x.cohortId === cohort.id);
+      if (!submission) {
+        submission = this.createEmptySubmission(cohort.id, team.id);
+        db().submissions.push(submission);
+      }
+
+      session.lastActiveAt = new Date();
+      return { session, team, cohort, submission };
+    };
+
+    /** Writes are refused unless the server-side window and status both allow it. */
+    const assertWritable = (
+      cohort: Cohort,
+      submission: Submission,
+    ): { ok: true } | { ok: false; error: string } => {
+      const permissions = evaluateParticipantPermissions(cohort, submission.status);
+      return permissions.canEdit ? { ok: true } : { ok: false, error: permissions.reason };
+    };
+
     return {
-      resolveInvite: async (token: string): Promise<ParticipantView | null> => {
-        const hash = hashInviteToken(token);
-        const invite = db().teamInvites.find((i) => i.tokenHash === hash);
-        // Unknown, revoked, and expired all return null — the caller must not
-        // be able to tell which, or it confirms a token exists.
-        if (!invite || invite.revokedAt) return null;
-        if (invite.expiresAt && invite.expiresAt.getTime() < Date.now()) return null;
+      verifyTeamAccess: async ({ groupNumber, code, ipHash }): Promise<VerifyTeamResult> => {
+        await this.ready;
+        const now = new Date();
 
-        const team = db().teams.find((t) => t.id === invite.teamId);
-        if (!team) return null;
-        const cohort = db().cohorts.find((c) => c.id === team.cohortId);
-        if (!cohort) return null;
+        // Rate limiting is keyed on hashed IP AND group, so one hostile client
+        // cannot lock a team out and one team cannot lock out an office.
+        const key = db().verificationAttempts.find(
+          (a) => a.ipHash === ipHash && a.groupNumber === groupNumber,
+        );
+        const decision = evaluateVerificationAttempt(
+          key ? { attempts: key.attempts, windowStartedAt: key.windowStartedAt, lockedUntil: key.lockedUntil } : null,
+          now,
+        );
 
-        let submission = db().submissions.find((s) => s.teamId === team.id && s.cohortId === cohort.id);
-        if (!submission) {
-          submission = this.createEmptySubmission(cohort.id, team.id);
-          db().submissions.push(submission);
+        if (!decision.allowed) {
+          return {
+            ok: false,
+            reason: 'rate_limited',
+            message: `Too many attempts. Try again in ${Math.ceil(decision.retryAfterSeconds / 60)} minute(s), or contact the Outskill programme team.`,
+            retryAfterSeconds: decision.retryAfterSeconds,
+          };
         }
 
-        invite.lastAccessedAt = new Date();
-        invite.accessCount += 1;
+        const recordFailure = () => {
+          const next = registerFailedVerification(
+            key ? { attempts: key.attempts, windowStartedAt: key.windowStartedAt, lockedUntil: key.lockedUntil } : null,
+            now,
+          );
+          if (key) {
+            Object.assign(key, next, { updatedAt: now });
+          } else {
+            db().verificationAttempts.push({
+              id: newId(),
+              cohortId: '',
+              groupNumber,
+              ipHash,
+              ...next,
+              updatedAt: now,
+            });
+          }
+        };
+
+        // Every failure below returns the SAME message, so the form cannot be
+        // used to discover which group numbers exist.
+        const team = db().teams.find((t) => t.groupNumber === groupNumber && t.status === 'active');
+        if (!team) {
+          recordFailure();
+          return { ok: false, reason: 'invalid', message: GENERIC_VERIFICATION_ERROR };
+        }
+
+        const accessCode = db().accessCodes.find((c) => c.teamId === team.id && !c.revokedAt);
+        if (!accessCode) {
+          recordFailure();
+          return { ok: false, reason: 'invalid', message: GENERIC_VERIFICATION_ERROR };
+        }
+
+        if (!(await verifyAccessCode(code, accessCode.codeHash))) {
+          recordFailure();
+          return { ok: false, reason: 'invalid', message: GENERIC_VERIFICATION_ERROR };
+        }
+
+        // Success clears the counter, so a team that fumbled then succeeded is
+        // not still one attempt from a lockout.
+        if (key) Object.assign(key, clearVerificationAttempts(now), { updatedAt: now });
+        accessCode.lastVerifiedAt = now;
+        accessCode.verifyCount += 1;
+
+        return { ok: true, teamId: team.id, cohortId: team.cohortId, groupNumber };
+      },
+
+      createSession: async (input: CreateSessionInput): Promise<CreatedSession> => {
+        await this.ready;
+        const team = this.requireTeam(input.teamId);
+        const cohort = this.requireCohort(team.cohortId);
+        const accessCode = this.db.accessCodes.find((c) => c.teamId === team.id && !c.revokedAt);
+
+        const window = computeSubmissionWindow(cohort);
+        const expiresAt = computeSessionExpiry(window.effectiveDeadline);
+        const { token, tokenHash } = generateParticipantSessionToken();
+
+        this.db.participantSessions.push({
+          id: newId(),
+          teamId: team.id,
+          cohortId: cohort.id,
+          sessionTokenHash: hashParticipantSessionToken(token, this.sessionSecret) || tokenHash,
+          editorName: input.editorName,
+          editorRole: input.editorRole,
+          accessCodeVersion: accessCode?.version ?? 1,
+          createdAt: new Date(),
+          lastActiveAt: new Date(),
+          expiresAt,
+          revokedAt: null,
+          ipHash: input.ipHash,
+        });
+
+        return { token, expiresAt };
+      },
+
+      resolveSession: async (token: string): Promise<ParticipantView | null> => {
+        const resolved = await resolve(token);
+        if (!resolved) return null;
+        const { session, team, cohort, submission } = resolved;
+
+        const permissions = evaluateParticipantPermissions(cohort, submission.status);
 
         return clone({
           cohort: {
@@ -176,45 +422,139 @@ export class MemoryDataStore implements DataStore {
             leadEmail: team.leadEmail,
             leadPhone: team.leadPhone,
           },
-          members: db().teamMembers.filter((m) => m.teamId === team.id).sort((a, b) => a.displayOrder - b.displayOrder),
-          submission,
-          artifacts: db().artifacts.filter((a) => a.submissionId === submission.id),
-          declarations: db().declarations.find((d) => d.submissionId === submission.id) ?? null,
-          ideas: db()
-            .ideas.filter((i) => i.cohortId === cohort.id && i.isActive)
+          members: this.db.teamMembers
+            .filter((m) => m.teamId === team.id)
             .sort((a, b) => a.displayOrder - b.displayOrder),
-          hasStoredCredentials: db().credentials.some(
+          submission,
+          artifacts: this.db.artifacts.filter((a) => a.submissionId === submission.id),
+          declarations: this.db.declarations.find((d) => d.submissionId === submission.id) ?? null,
+          ideas: this.db.ideas
+            .filter((i) => i.cohortId === cohort.id && i.isActive)
+            .sort((a, b) => a.displayOrder - b.displayOrder),
+          hasStoredCredentials: this.db.credentials.some(
             (c) => c.submissionId === submission.id && !c.deletedAt,
           ),
-          canEdit: canParticipantEdit(cohort.status, submission.status),
+          canEdit: permissions.canEdit,
+          canSubmit: permissions.canSubmit,
+          windowMessage: permissions.reason,
+          effectiveDeadline: permissions.window.effectiveDeadline,
+          editorName: session.editorName,
+          recentActivity: this.db.teamActivity
+            .filter((a) => a.submissionId === submission.id)
+            .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+            .slice(0, 8),
         });
       },
 
-      saveDraft: async (submissionId, draft) => {
-        const submission = this.requireSubmission(submissionId);
-        this.assertEditable(submission);
-        submission.draftPayload = clone(draft);
-        submission.draftUpdatedAt = new Date();
-        submission.updatedAt = new Date();
-        this.promoteDraftToColumns(submission);
-        return clone(submission);
+      endSession: async (token: string) => {
+        await this.ready;
+        const hash = hashParticipantSessionToken(token, this.sessionSecret);
+        const session = this.db.participantSessions.find((s) => s.sessionTokenHash === hash);
+        if (session) session.revokedAt = new Date();
       },
 
-      finaliseSubmission: async (submissionId, context) => {
-        const submission = this.requireSubmission(submissionId);
-        this.assertEditable(submission);
-        const cohort = this.requireCohort(submission.cohortId);
-        const team = this.requireTeam(submission.teamId);
+      resolveInviteTeam: async (token) => {
+        await this.ready;
+        const invite = this.findLiveInvite(token);
+        if (!invite) return null;
+        const team = this.db.teams.find((t) => t.id === invite.teamId);
+        return team ? { teamId: team.id, groupNumber: team.groupNumber } : null;
+      },
+
+      redeemInviteToken: async (token, editor): Promise<CreatedSession | null> => {
+        await this.ready;
+        const invite = this.findLiveInvite(token);
+        if (!invite) return null;
+
+        invite.lastAccessedAt = new Date();
+        invite.accessCount += 1;
+
+        return this.participant.createSession({
+          teamId: invite.teamId,
+          editorName: editor.name,
+          editorRole: editor.role,
+          ipHash: null,
+        });
+      },
+
+      saveDraft: async (token, draft, expectedVersion): Promise<SaveDraftResult> => {
+        const resolved = await resolve(token);
+        if (!resolved) return { ok: false, error: 'Your session has ended. Sign in again to continue.' };
+        const { session, cohort, submission } = resolved;
+
+        const writable = assertWritable(cohort, submission);
+        if (!writable.ok) return { ok: false, error: writable.error };
+
+        // Optimistic concurrency: a stale write is refused rather than allowed
+        // to silently overwrite a teammate.
+        const versionCheck = checkVersion({ expectedVersion, currentVersion: submission.version });
+        if (!versionCheck.ok) {
+          return {
+            ok: false,
+            conflict: { currentVersion: versionCheck.currentVersion, message: versionCheck.message },
+            submission: clone(submission),
+          };
+        }
+
+        // Merged per step, matching production. Replacing would let a partial
+        // save destroy every other step's payload.
+        submission.draftPayload = {
+          ...((submission.draftPayload ?? {}) as Record<string, unknown>),
+          ...clone(draft),
+        };
+        submission.draftUpdatedAt = new Date();
+        submission.updatedAt = new Date();
+        submission.version = versionCheck.nextVersion;
+        submission.lastEditedBy = session.editorName;
+        this.promoteDraftToColumns(submission);
+
+        return { ok: true, submission: clone(submission) };
+      },
+
+      finaliseSubmission: async (token, context): Promise<FinaliseResult> => {
+        const resolved = await resolve(token);
+        if (!resolved) return { ok: false, error: 'Your session has ended. Sign in again to continue.' };
+        const { session, team, cohort, submission } = resolved;
+
+        const permissions = evaluateParticipantPermissions(cohort, submission.status);
+        if (!permissions.canSubmit) return { ok: false, error: permissions.reason };
+
+        // Already final — never mint a second receipt for the same submission.
+        if (submission.receiptId && submission.status === 'locked') {
+          return { ok: false, error: 'This submission has already been finalised.' };
+        }
+
+        // The selected idea must still be approved for the cohort.
+        const idea = this.db.ideas.find((i) => i.id === submission.ideaId);
+        if (!idea || !idea.isActive) {
+          return {
+            ok: false,
+            error: 'The selected product idea is no longer available for this cohort. Choose an approved idea.',
+          };
+        }
+
+        const deck = this.db.artifacts.find(
+          (a) => a.submissionId === submission.id && a.kind === 'deck_pdf' && a.uploadCompletedAt,
+        );
+        if (!deck) return { ok: false, error: 'Upload your pitch deck as a PDF before submitting.' };
+
+        const video = this.db.artifacts.find(
+          (a) => a.submissionId === submission.id && a.kind === 'demo_video' && a.externalUrl,
+        );
+        if (!video) return { ok: false, error: 'Add your demo video link before submitting.' };
+        if (!submission.productUrl) return { ok: false, error: 'Add your live product URL before submitting.' };
 
         const now = new Date();
         submission.status = 'locked';
         submission.submittedAt = now;
+        submission.submittedByName = session.editorName;
         submission.lockedAt = now;
         submission.updatedAt = now;
+        submission.version += 1;
         submission.isLate = isSubmissionLate(now, cohort.day13DeadlineAt);
         submission.receiptId ??= generateReceiptId(cohort.code, team.groupNumber);
 
-        const declarations = this.db.declarations.find((d) => d.submissionId === submissionId);
+        const declarations = this.db.declarations.find((d) => d.submissionId === submission.id);
         if (declarations) {
           declarations.acceptedAt = now;
           declarations.acceptedIpHash = context.ipHash;
@@ -222,53 +562,207 @@ export class MemoryDataStore implements DataStore {
 
         this.db.events.push({
           id: newId(),
-          submissionId,
+          submissionId: submission.id,
           eventType: 'final_submitted',
           actorType: 'participant',
-          detail: { receiptId: submission.receiptId },
+          detail: { receiptId: submission.receiptId, by: session.editorName },
+          createdAt: now,
+        });
+        this.db.teamActivity.push({
+          id: newId(),
+          submissionId: submission.id,
+          teamId: team.id,
+          kind: 'final_submitted',
+          editorName: session.editorName,
+          section: null,
           createdAt: now,
         });
 
-        return { submission: clone(submission), receiptId: submission.receiptId };
+        return { ok: true, receiptId: submission.receiptId };
       },
 
-      attachArtifact: async (submissionId, artifact) => {
-        const submission = this.requireSubmission(submissionId);
-        this.assertEditable(submission);
-        // One deck and one demo video per submission — replace rather than append.
+      /**
+       * Demo mode holds the bytes in memory.
+       *
+       * Same contract as production — bytes first, record second — so the demo
+       * cannot show a success that the real path would not have produced.
+       */
+      uploadDeck: async (token, input) => {
+        await this.ready;
+        const resolved = await resolve(token);
+        if (!resolved) return null;
+        const { cohort, submission } = resolved;
+        if (!assertWritable(cohort, submission).ok) return null;
+
+        const path = `${cohort.id}/${submission.id}/pitch-deck.pdf`;
+        this.demoDeckBytes.set(path, input.bytes);
+
+        return this.participant.attachArtifact(token, {
+          kind: 'deck_pdf',
+          storageBucket: 'submission-decks',
+          storagePath: path,
+          originalFilename: input.originalFilename,
+          mimeType: input.mimeType,
+          byteSize: input.bytes.byteLength,
+          checksumSha256: null,
+          externalUrl: null,
+          uploadCompletedAt: new Date(),
+          isAccessible: true,
+          lastCheckedAt: new Date(),
+        });
+      },
+
+      /**
+       * Demo mode has no bucket to sign against, so it hands back a URL this
+       * process serves itself.
+       *
+       * The two-step shape is kept exactly as production has it — a ticket, an
+       * upload, then a confirmation that checks the bytes — because a demo that
+       * skips the confirmation would show a success the real path might refuse.
+       */
+      createDeckUploadTicket: async (token, input) => {
+        await this.ready;
+        const resolved = await resolve(token);
+        if (!resolved) return { ok: false, error: 'Your session has expired. Sign in again to continue.' };
+        const { cohort, submission } = resolved;
+
+        const writable = assertWritable(cohort, submission);
+        if (!writable.ok) return { ok: false, error: writable.error };
+
+        const declared = validateDeckUpload({
+          name: input.originalFilename,
+          type: input.mimeType,
+          size: input.byteSize,
+        });
+        if (!declared.ok) return { ok: false, error: declared.message };
+
+        const storagePath = `${cohort.id}/${submission.id}/pending-${this.db.artifacts.length}-${Date.now()}.pdf`;
+        return {
+          ok: true,
+          uploadUrl: `/api/demo-upload/${encodeURIComponent('submission-decks')}/${encodeURIComponent(storagePath)}`,
+          uploadToken: 'demo',
+          storagePath,
+          maxBytes: MAX_DECK_BYTES,
+        };
+      },
+
+      confirmDeckUpload: async (token, input) => {
+        await this.ready;
+        const resolved = await resolve(token);
+        if (!resolved) return { ok: false, error: 'Your session has expired. Sign in again to continue.' };
+        const { cohort, submission } = resolved;
+
+        const writable = assertWritable(cohort, submission);
+        if (!writable.ok) return { ok: false, error: writable.error };
+
+        // The browser's only input, and therefore the only thing to check.
+        const prefix = `${cohort.id}/${submission.id}/`;
+        if (!input.storagePath.startsWith(prefix) || input.storagePath.includes('..')) {
+          return { ok: false, error: 'That upload does not belong to this submission.' };
+        }
+
+        const bytes = this.demoDeckBytes.get(input.storagePath);
+        if (!bytes) {
+          return { ok: false, error: 'The upload did not finish. Choose the file and try again.' };
+        }
+        if (bytes.byteLength > MAX_DECK_BYTES) {
+          this.demoDeckBytes.delete(input.storagePath);
+          return { ok: false, error: 'The pitch deck must be 25 MB or smaller.' };
+        }
+        if (!looksLikePdf(bytes.slice(0, 8))) {
+          this.demoDeckBytes.delete(input.storagePath);
+          return {
+            ok: false,
+            error: 'That file is not a PDF. Export your deck as a PDF and upload it again.',
+          };
+        }
+
+        const previous = this.db.artifacts
+          .filter((a) => a.submissionId === submission.id && a.kind === 'deck_pdf')
+          .map((a) => a.storagePath)
+          .filter((path): path is string => Boolean(path) && path !== input.storagePath);
+
+        const artifact = await this.participant.attachArtifact(token, {
+          kind: 'deck_pdf',
+          storageBucket: 'submission-decks',
+          storagePath: input.storagePath,
+          originalFilename: input.originalFilename,
+          mimeType: 'application/pdf',
+          byteSize: bytes.byteLength,
+          checksumSha256: null,
+          externalUrl: null,
+          uploadCompletedAt: new Date(),
+          isAccessible: true,
+          lastCheckedAt: new Date(),
+        });
+
+        if (!artifact) {
+          this.demoDeckBytes.delete(input.storagePath);
+          return { ok: false, error: 'Could not record the upload. Your previous deck is unchanged.' };
+        }
+
+        for (const path of previous) this.demoDeckBytes.delete(path);
+        return { ok: true, artifact };
+      },
+
+      attachArtifact: async (token, artifact) => {
+        const resolved = await resolve(token);
+        if (!resolved) return null;
+        const { cohort, submission, session } = resolved;
+
+        const writable = assertWritable(cohort, submission);
+        if (!writable.ok) return null;
+
+        // One deck and one demo video per submission — replace, never append.
         if (artifact.kind === 'deck_pdf' || artifact.kind === 'demo_video') {
           this.db.artifacts = this.db.artifacts.filter(
-            (a) => !(a.submissionId === submissionId && a.kind === artifact.kind),
+            (a) => !(a.submissionId === submission.id && a.kind === artifact.kind),
           );
         }
         const record: SubmissionArtifact = {
-          ...artifact,
+          ...clone(artifact),
           id: newId(),
-          submissionId,
+          submissionId: submission.id,
           createdAt: new Date(),
         };
         this.db.artifacts.push(record);
+
+        this.db.teamActivity.push({
+          id: newId(),
+          submissionId: submission.id,
+          teamId: submission.teamId,
+          kind: artifact.kind === 'deck_pdf' ? 'deck_replaced' : 'demo_link_saved',
+          editorName: session.editorName,
+          section: 'Demo and deck',
+          createdAt: new Date(),
+        });
+
         return clone(record);
       },
 
-      removeArtifact: async (submissionId, artifactId) => {
-        const submission = this.requireSubmission(submissionId);
-        this.assertEditable(submission);
+      removeArtifact: async (token, artifactId) => {
+        const resolved = await resolve(token);
+        if (!resolved) return;
+        const { cohort, submission } = resolved;
+        if (!assertWritable(cohort, submission).ok) return;
         this.db.artifacts = this.db.artifacts.filter(
-          (a) => !(a.id === artifactId && a.submissionId === submissionId),
+          (a) => !(a.id === artifactId && a.submissionId === submission.id),
         );
       },
 
-      storeCredentials: async (submissionId, values) => {
-        const submission = this.requireSubmission(submissionId);
-        this.assertEditable(submission);
-        const existing = this.db.credentials.find((c) => c.submissionId === submissionId);
+      storeCredentials: async (token, values) => {
+        const resolved = await resolve(token);
+        if (!resolved) return;
+        const { cohort, submission } = resolved;
+        if (!assertWritable(cohort, submission).ok) return;
+
+        const existing = this.db.credentials.find((c) => c.submissionId === submission.id);
         const enc = (value: string | undefined) =>
           value && value.length > 0 ? serialiseEnvelope(encryptSecret(value, DEMO_KEY)) : null;
 
         const record: SubmissionCredentials = existing ?? {
           id: newId(),
-          submissionId,
+          submissionId: submission.id,
           usernameCiphertext: null,
           passwordCiphertext: null,
           loginInstructionsCiphertext: null,
@@ -293,15 +787,54 @@ export class MemoryDataStore implements DataStore {
             .sort((a, b) => a.displayOrder - b.displayOrder),
         ),
 
-      recordEvent: async (submissionId, event) => {
-        this.db.events.push({
+      recordActivity: async (token, kind, section) => {
+        const resolved = await resolve(token);
+        if (!resolved) return;
+        const { session, submission } = resolved;
+
+        // Collapse repeats: the same editor doing the same thing to the same
+        // section within a minute is one entry, not a flood.
+        const recent = this.db.teamActivity.find(
+          (a) =>
+            a.submissionId === submission.id &&
+            a.kind === kind &&
+            a.editorName === session.editorName &&
+            (a.section ?? null) === (section ?? null) &&
+            Date.now() - a.createdAt.getTime() < 60_000,
+        );
+        if (recent) {
+          recent.createdAt = new Date();
+          return;
+        }
+
+        this.db.teamActivity.push({
           id: newId(),
-          submissionId,
-          eventType: event.eventType,
-          actorType: 'participant',
-          detail: event.detail ?? {},
+          submissionId: submission.id,
+          teamId: submission.teamId,
+          kind,
+          editorName: session.editorName,
+          section: section ?? null,
           createdAt: new Date(),
         });
+      },
+
+      getReceipt: async (token): Promise<ParticipantReceipt | null> => {
+        const resolved = await resolve(token);
+        if (!resolved) return null;
+        const { team, cohort, submission } = resolved;
+        if (!submission.receiptId || !submission.submittedAt) return null;
+
+        const idea = this.db.ideas.find((i) => i.id === submission.ideaId);
+        return {
+          cohortName: cohort.name,
+          cohortTimezone: cohort.timezone,
+          groupNumber: team.groupNumber,
+          productName: submission.productName ?? 'Untitled',
+          ideaTitle: idea?.title ?? '—',
+          submittedByName: submission.submittedByName ?? 'the team',
+          submittedAt: submission.submittedAt,
+          receiptId: submission.receiptId,
+        };
       },
     };
   }
@@ -411,6 +944,28 @@ export class MemoryDataStore implements DataStore {
         const cohort = this.db.cohorts.find((c) => c.code.toLowerCase() === code.toLowerCase());
         return cohort ? clone(cohort) : null;
       },
+      listLearnerFacingCohorts: async () =>
+        clone(this.db.cohorts.filter((c) => isLearnerFacing(c.status))),
+
+      findActiveCohort: async () => {
+        // Exactly one learner-facing cohort, or none — never a guess between
+        // two. Same rule as the production driver, so demo mode cannot teach an
+        // operator something that is not true in production.
+        const facing = resolveLearnerFacingCohort(this.db.cohorts);
+        if (facing.cohort) return clone(facing.cohort);
+        if (facing.ambiguous) return null;
+
+        // Ranked, not filtered: between cohorts the entry page still needs
+        // something to name and a window state to explain.
+        const rank = (cohort: Cohort) =>
+          ({ open: 0, paused: 1, closed: 2, judging: 3, draft: 4, finalised: 5, archived: 6 })[
+            cohort.status
+          ] ?? 9;
+        const candidates = [...this.db.cohorts].sort(
+          (a, b) => rank(a) - rank(b) || b.createdAt.getTime() - a.createdAt.getTime(),
+        );
+        return candidates[0] ? clone(candidates[0]) : null;
+      },
       createCohort: async (input) => {
         if (this.db.cohorts.some((c) => c.code.toLowerCase() === input.code.toLowerCase())) {
           throw new Error(`A cohort with code "${input.code}" already exists.`);
@@ -431,9 +986,111 @@ export class MemoryDataStore implements DataStore {
         Object.assign(cohort, patch, { id: cohort.id, updatedAt: new Date() });
         return clone(cohort);
       },
+      getCohortDependencies: async (id) => {
+        const teamIds = this.db.teams.filter((t) => t.cohortId === id).map((t) => t.id);
+        const submissionIds = this.db.submissions
+          .filter((s) => s.cohortId === id)
+          .map((s) => s.id);
+        const jobIds = this.db.jobs.filter((j) => j.cohortId === id).map((j) => j.id);
+
+        return {
+          teams: teamIds.length,
+          teamMembers: this.db.teamMembers.filter((m) => teamIds.includes(m.teamId)).length,
+          submissions: submissionIds.length,
+          finalSubmissions: this.db.submissions.filter(
+            (s) => s.cohortId === id && s.status !== 'draft',
+          ).length,
+          artifacts: this.db.artifacts.filter((a) => submissionIds.includes(a.submissionId)).length,
+          accessCodes: this.db.accessCodes.filter((c) => c.cohortId === id).length,
+          participantSessions: this.db.participantSessions.filter((s) => s.cohortId === id).length,
+          assessmentJobs: jobIds.length,
+          categoryScores: this.db.scores.filter((s) => jobIds.includes(s.jobId)).length,
+          rankingSnapshots: this.db.rankingSnapshots.filter((s) => s.cohortId === id).length,
+          finalSelections: this.db.finalSelections.filter((s) => s.cohortId === id).length,
+          auditEntries: this.db.auditLogs.filter((a) => a.cohortId === id).length,
+        };
+      },
+
+      archiveCohort: async (id, actor) => {
+        const cohort = this.db.cohorts.find((c) => c.id === id);
+        if (!cohort) throw new Error(`Cohort ${id} not found.`);
+        const previousStatus = cohort.status;
+
+        // Archiving ends learner access rather than letting sessions run out.
+        this.db.participantSessions
+          .filter((s) => s.cohortId === id && !s.revokedAt)
+          .forEach((s) => {
+            s.revokedAt = new Date();
+          });
+        cohort.status = 'archived';
+        cohort.updatedAt = new Date();
+
+        this.db.auditLogs.push({
+          id: newId(),
+          actorType: 'shared-admin',
+          actorRef: actor,
+          action: 'cohort.archived',
+          entityType: 'cohort',
+          entityId: id,
+          cohortId: id,
+          before: { status: previousStatus },
+          after: { status: 'archived' },
+          ipHash: null,
+          userAgentHash: null,
+          createdAt: new Date(),
+        });
+        return clone(cohort);
+      },
+
+      deleteCohortPermanently: async (id, input) => {
+        const cohort = this.db.cohorts.find((c) => c.id === id);
+        if (!cohort) throw new Error(`Cohort ${id} not found.`);
+
+        const dependencies = await this.cohorts.getCohortDependencies(id);
+        const assessment = assessCohortDeletion(cohort.name, dependencies);
+        if (assessment.verdict !== 'deletable') {
+          throw new Error(
+            `“${cohort.name}” holds work and cannot be deleted: ${assessment.blockers.join(' ')} ` +
+              'Archive it instead.',
+          );
+        }
+        if (!confirmationMatches(input.confirmationPhrase, cohort.name)) {
+          throw new Error(`Type the cohort name exactly to confirm: ${cohort.name}`);
+        }
+
+        // Audit first: the record must outlive what it describes.
+        this.db.auditLogs.push({
+          id: newId(),
+          actorType: 'shared-admin',
+          actorRef: input.actor,
+          action: 'cohort.deleted_permanently',
+          entityType: 'cohort',
+          entityId: id,
+          cohortId: null,
+          before: null,
+          after: { name: cohort.name, code: cohort.code, removed: assessment.willRemove },
+          ipHash: null,
+          userAgentHash: null,
+          createdAt: new Date(),
+        });
+
+        const teamIds = this.db.teams.filter((t) => t.cohortId === id).map((t) => t.id);
+        this.db.teams = this.db.teams.filter((t) => t.cohortId !== id);
+        this.db.teamMembers = this.db.teamMembers.filter((m) => !teamIds.includes(m.teamId));
+        this.db.ideas = this.db.ideas.filter((i) => i.cohortId !== id);
+        this.db.accessCodes = this.db.accessCodes.filter((c) => c.cohortId !== id);
+        this.db.participantSessions = this.db.participantSessions.filter((s) => s.cohortId !== id);
+        this.db.cohorts = this.db.cohorts.filter((c) => c.id !== id);
+
+        return { deleted: true as const, removed: assessment.willRemove };
+      },
+
       setCohortStatus: async (id, status: CohortStatus) => {
         const cohort = this.db.cohorts.find((c) => c.id === id);
         if (!cohort) throw new Error(`Cohort ${id} not found.`);
+
+        const exclusivity = checkCohortExclusivity(cohort, status, this.db.cohorts);
+        if (!exclusivity.allowed) throw new Error(exclusivity.reason);
         cohort.status = status;
         if (status === 'finalised') cohort.finalisedAt = new Date();
         cohort.updatedAt = new Date();
@@ -458,7 +1115,18 @@ export class MemoryDataStore implements DataStore {
       updateIdea: async (id, patch) => {
         const idea = this.db.ideas.find((i) => i.id === id);
         if (!idea) throw new Error(`Idea ${id} not found.`);
+
+        // Changing what judging is measured against un-approves the definition.
+        // Enforced here rather than in each caller: an approval that survives an
+        // edit is worse than no approval at all, because it looks reviewed.
+        const reverts = changesExpandedDefinition(idea, patch);
+
         Object.assign(idea, patch, { id: idea.id, updatedAt: new Date() });
+        if (reverts) {
+          idea.definitionStatus = 'draft';
+          idea.definitionApprovedAt = null;
+          idea.definitionApprovedBy = null;
+        }
         return clone(idea);
       },
       deleteIdea: async (id) => {
@@ -466,6 +1134,59 @@ export class MemoryDataStore implements DataStore {
         const idea = this.db.ideas.find((i) => i.id === id);
         if (idea) idea.isActive = false;
       },
+      closeSubmissions: async (id, closureType) => {
+        const cohort = this.db.cohorts.find((c) => c.id === id);
+        if (!cohort) throw new Error(`Cohort ${id} not found.`);
+        cohort.status = 'closed';
+        cohort.closedAt = new Date();
+        cohort.closureType = closureType;
+        // A closure supersedes any temporary extension.
+        cohort.acceptingUntil = null;
+        cohort.updatedAt = new Date();
+        return clone(cohort);
+      },
+
+      reopenSubmissions: async (id, input) => {
+        const cohort = this.db.cohorts.find((c) => c.id === id);
+        if (!cohort) throw new Error(`Cohort ${id} not found.`);
+
+        // Refuse a reopen that would leave the cohort open but rejecting writes.
+        const validation = validateReopen(cohort, input);
+        if (!validation.valid) throw new Error(validation.problems.join(' '));
+
+        cohort.status = 'open';
+        cohort.closedAt = null;
+        cohort.closureType = null;
+        if (input.newDeadline) cohort.day13DeadlineAt = input.newDeadline;
+        cohort.acceptingUntil = input.acceptingUntil ?? null;
+        cohort.updatedAt = new Date();
+        return clone(cohort);
+      },
+
+      reconcileDeadlines: async (now = new Date()) => {
+        const closed: string[] = [];
+        for (const cohort of this.db.cohorts) {
+          if (needsDeadlineReconciliation(cohort, now)) {
+            cohort.status = 'closed';
+            cohort.closedAt = now;
+            cohort.closureType = 'deadline';
+            cohort.updatedAt = now;
+            closed.push(cohort.id);
+          }
+        }
+        return { closed };
+      },
+
+      approveIdeaDefinition: async (ideaId, actor) => {
+        const idea = this.db.ideas.find((i) => i.id === ideaId);
+        if (!idea) throw new Error(`Idea ${ideaId} not found.`);
+        idea.definitionStatus = 'approved';
+        idea.definitionApprovedAt = new Date();
+        idea.definitionApprovedBy = actor;
+        idea.updatedAt = new Date();
+        return clone(idea);
+      },
+
       cloneIdeas: async (fromCohortId, toCohortId) => {
         const source = this.db.ideas.filter((i) => i.cohortId === fromCohortId);
         const copies = source.map((idea) => ({
@@ -532,6 +1253,7 @@ export class MemoryDataStore implements DataStore {
             id: newId(),
             cohortId,
             groupNumber: row.groupNumber,
+            whatsappLink: null,
             leadName: row.leadName,
             leadEmail: row.leadEmail,
             leadPhone: row.leadPhone,
@@ -560,6 +1282,97 @@ export class MemoryDataStore implements DataStore {
         });
 
         return { created: clone(created), skipped, invites };
+      },
+
+      /** Mirrors the Postgres behaviour: idempotent, additive, never deletes a learner. */
+      importLearnerAllocation: async (cohortId, groups): Promise<LearnerAllocationResult> => {
+        await this.ready;
+        const result: LearnerAllocationResult = {
+          teamsCreated: 0,
+          teamsMatched: 0,
+          learnersAdded: 0,
+          learnersUpdated: 0,
+          learnersUnchanged: 0,
+          whatsappLinksSet: 0,
+          departed: [],
+          failed: [],
+        };
+
+        for (const group of groups) {
+          let team = this.db.teams.find(
+            (t) => t.cohortId === cohortId && t.groupNumber === group.groupNumber,
+          );
+
+          if (!team) {
+            team = {
+              id: newId(),
+              cohortId,
+              groupNumber: group.groupNumber,
+              leadName: null,
+              leadEmail: null,
+              leadPhone: '',
+              whatsappLink: group.whatsappLink,
+              status: 'active',
+              importedAt: new Date(),
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            };
+            this.db.teams.push(team);
+            result.teamsCreated += 1;
+            if (group.whatsappLink) result.whatsappLinksSet += 1;
+          } else {
+            result.teamsMatched += 1;
+            // A blank Link column in a later sheet must not erase a link.
+            if (group.whatsappLink && group.whatsappLink !== team.whatsappLink) {
+              team.whatsappLink = group.whatsappLink;
+              result.whatsappLinksSet += 1;
+            }
+          }
+
+          const members = this.db.teamMembers.filter((m) => m.teamId === team!.id);
+          const byEmail = new Map(
+            members.filter((m) => m.email).map((m) => [m.email!.toLowerCase(), m] as const),
+          );
+          let order = members.length;
+
+          for (const learner of group.learners) {
+            const key = learner.email.toLowerCase();
+            const match = byEmail.get(key);
+            if (!match) {
+              this.db.teamMembers.push({
+                id: newId(),
+                teamId: team.id,
+                fullName: learner.name,
+                email: learner.email,
+                contribution: '',
+                displayOrder: order,
+                isActive: true,
+              });
+              order += 1;
+              result.learnersAdded += 1;
+              continue;
+            }
+            if (match.fullName !== learner.name) {
+              match.fullName = learner.name;
+              match.isActive = true;
+              result.learnersUpdated += 1;
+            } else {
+              result.learnersUnchanged += 1;
+            }
+            byEmail.delete(key);
+          }
+
+          for (const left of byEmail.values()) {
+            result.departed.push({
+              teamId: team.id,
+              groupNumber: group.groupNumber,
+              name: left.fullName,
+              email: left.email ?? '',
+            });
+          }
+        }
+
+        return result;
       },
 
       generateInvite: async (teamId) => {
@@ -592,7 +1405,133 @@ export class MemoryDataStore implements DataStore {
           });
         this.db.demoInviteTokens.delete(teamId);
       },
+
+      generateAccessCodes: async ({ cohortId, teamIds, regenerate }): Promise<GeneratedAccessCodeRow[]> => {
+        await this.ready;
+        const rows: GeneratedAccessCodeRow[] = [];
+
+        const targets = this.db.teams.filter(
+          (t) => t.cohortId === cohortId && (!teamIds || teamIds.includes(t.id)),
+        );
+
+        for (const team of targets) {
+          const existing = this.db.accessCodes.find((c) => c.teamId === team.id && !c.revokedAt);
+          // Without an explicit regenerate, only teams missing a code get one —
+          // so pressing the button twice never invalidates working codes.
+          if (existing && !regenerate) continue;
+
+          const generated = await generateAccessCode();
+          const nextVersion = (existing?.version ?? 0) + 1;
+
+          if (existing) {
+            existing.revokedAt = new Date();
+            // Bumping the version invalidates every session under the old code.
+            this.revokeSessionsForTeam(team.id, 'access code regenerated');
+          }
+
+          this.db.accessCodes.push({
+            id: newId(),
+            teamId: team.id,
+            cohortId: team.cohortId,
+            groupNumber: team.groupNumber,
+            codeHash: generated.hash,
+            version: nextVersion,
+            createdAt: new Date(),
+            revokedAt: null,
+            lastVerifiedAt: null,
+            verifyCount: 0,
+          });
+
+          rows.push({
+            teamId: team.id,
+            groupNumber: team.groupNumber,
+            leadName: team.leadName,
+            leadEmail: team.leadEmail,
+            whatsappLink: team.whatsappLink,
+            memberCount: this.db.teamMembers.filter((m) => m.teamId === team.id).length,
+            // Returned once. Only the hash is stored.
+            code: generated.formatted,
+            regenerated: Boolean(existing),
+          });
+        }
+
+        return rows;
+      },
+
+      listAccessCodeStatus: async (cohortId): Promise<AccessCodeStatus[]> => {
+        await this.ready;
+        return this.db.teams
+          .filter((t) => t.cohortId === cohortId)
+          .sort((a, b) => a.groupNumber - b.groupNumber)
+          .map((team) => {
+            const code = this.db.accessCodes
+              .filter((c) => c.teamId === team.id)
+              .sort((a, b) => b.version - a.version)[0];
+            const lock = this.db.verificationAttempts.find(
+              (a) => a.groupNumber === team.groupNumber && a.lockedUntil && a.lockedUntil > new Date(),
+            );
+            return {
+              teamId: team.id,
+              groupNumber: team.groupNumber,
+              leadName: team.leadName,
+              leadEmail: team.leadEmail,
+              whatsappLink: team.whatsappLink,
+              hasCode: Boolean(code && !code.revokedAt),
+              version: code?.version ?? 0,
+              createdAt: code?.createdAt ?? null,
+              revokedAt: code?.revokedAt ?? null,
+              lastVerifiedAt: code?.lastVerifiedAt ?? null,
+              verifyCount: code?.verifyCount ?? 0,
+              activeSessions: this.db.participantSessions.filter(
+                (s) => s.teamId === team.id && !s.revokedAt && s.expiresAt > new Date(),
+              ).length,
+              lockedUntil: lock?.lockedUntil ?? null,
+            };
+          });
+      },
+
+      revokeAccessCode: async (teamId) => {
+        await this.ready;
+        this.db.accessCodes
+          .filter((c) => c.teamId === teamId && !c.revokedAt)
+          .forEach((c) => {
+            c.revokedAt = new Date();
+          });
+        this.revokeSessionsForTeam(teamId, 'access revoked');
+      },
+
+      restoreAccessCode: async (teamId) => {
+        await this.ready;
+        // Restoring cannot resurrect the old plaintext — it issues a new code.
+        const latest = this.db.accessCodes
+          .filter((c) => c.teamId === teamId)
+          .sort((a, b) => b.version - a.version)[0];
+        if (latest) latest.revokedAt = null;
+      },
+
+      clearVerificationLockout: async (_cohortId, groupNumber) => {
+        this.db.verificationAttempts
+          .filter((a) => a.groupNumber === groupNumber)
+          .forEach((a) => {
+            a.attempts = 0;
+            a.lockedUntil = null;
+            a.windowStartedAt = new Date();
+            a.updatedAt = new Date();
+          });
+      },
     };
+  }
+
+  /** Revoke every live session for a team. Used by regeneration and revocation. */
+  private revokeSessionsForTeam(teamId: string, _reason: string): number {
+    let revoked = 0;
+    for (const session of this.db.participantSessions) {
+      if (session.teamId === teamId && !session.revokedAt) {
+        session.revokedAt = new Date();
+        revoked += 1;
+      }
+    }
+    return revoked;
   }
 
   // ------------------------------------------------------------------------
@@ -623,6 +1562,23 @@ export class MemoryDataStore implements DataStore {
         const submission = this.db.submissions.find((s) => s.id === id);
         return submission ? clone(submission) : null;
       },
+
+      findByReceiptId: async (receiptId) => {
+        const normalised = receiptId.trim().toUpperCase();
+        const submission = this.db.submissions.find(
+          (s) => (s.receiptId ?? '').toUpperCase() === normalised,
+        );
+        return submission ? clone(submission) : null;
+      },
+
+      listTeamActivity: async (submissionId) =>
+        clone(
+          this.db.teamActivity
+            .filter((a) => a.submissionId === submissionId)
+            .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()),
+        ),
+
+      revokeTeamSessions: async (teamId) => this.revokeSessionsForTeam(teamId, 'admin revoked'),
 
       getSubmissionDetail: async (id) => this.buildSubmissionDetail(id),
 
@@ -1284,18 +2240,6 @@ export class MemoryDataStore implements DataStore {
     return team;
   }
 
-  /** Server-side guard: a locked submission or a closed cohort cannot be edited. */
-  private assertEditable(submission: Submission): void {
-    const cohort = this.requireCohort(submission.cohortId);
-    if (!canParticipantEdit(cohort.status, submission.status)) {
-      throw new Error(
-        submission.status === 'locked'
-          ? 'This submission has been finally submitted and is locked. Contact the Outskill team if you need it reopened.'
-          : 'This cohort is not currently accepting changes.',
-      );
-    }
-  }
-
   private createEmptySubmission(cohortId: string, teamId: string): Submission {
     const now = new Date();
     return {
@@ -1329,9 +2273,12 @@ export class MemoryDataStore implements DataStore {
       builderStack: null,
       apisUsed: null,
       externalTemplates: null,
+      version: 1,
+      lastEditedBy: null,
       draftPayload: {},
       draftUpdatedAt: null,
       submittedAt: null,
+      submittedByName: null,
       receiptId: null,
       lockedAt: null,
       reopenedAt: null,

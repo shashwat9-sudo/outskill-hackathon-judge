@@ -1,14 +1,17 @@
 import Link from 'next/link';
 import {
+  JUDGING_UNAVAILABLE_MESSAGE,
+  storeCapabilities,
   demoTeamId,
   evaluateDeadline,
   evaluateShortlistWindow,
   formatInTimezone,
   type Cohort,
 } from '@ohj/shared';
-import { getDemoStore, getStore, isDemo } from '@/lib/store';
+import { getDemoStore, getStoreAsync, isDemo } from '@/lib/store';
 import { requireAdmin } from '@/server/admin-auth';
 import {
+  Alert,
   Badge,
   Card,
   CardHeader,
@@ -19,6 +22,7 @@ import {
   cn,
 } from '@/components/ui';
 import { OnboardingPanel } from './onboarding';
+import { ReceiptLookup } from './receipt-lookup';
 
 export const dynamic = 'force-dynamic';
 
@@ -30,8 +34,8 @@ export const dynamic = 'force-dynamic';
  * I do next, and will the shortlist be ready on time.
  */
 export default async function AdminOverviewPage() {
-  await requireAdmin();
-  const store = getStore();
+  const session = await requireAdmin();
+  const store = await getStoreAsync();
   const demo = getDemoStore();
   const cohorts = await store.cohorts.listCohorts();
   const cohort = cohorts.find((c) => c.status === 'judging' || c.status === 'open') ?? cohorts[0];
@@ -44,7 +48,7 @@ export default async function AdminOverviewPage() {
         action={
           <Link
             href="/admin/cohorts"
-            className="rounded-[10px] bg-brand px-4 py-2.5 text-sm font-bold text-black"
+            className="rounded-[10px] bg-brand px-4 py-2.5 text-sm font-bold text-on-accent"
           >
             Create your first cohort
           </Link>
@@ -53,37 +57,56 @@ export default async function AdminOverviewPage() {
     );
   }
 
-  const [submissions, stats, snapshot, flags, disqualifications, teams, ideas, selections] =
-    await Promise.all([
-      store.submissions.listSubmissions(cohort.id),
-      store.assessment.getQueueStats(cohort.id),
-      store.ranking.getCurrentSnapshot(cohort.id),
-      store.assessment.listManualReviewFlags(cohort.id),
-      store.assessment.listDisqualifications(cohort.id),
-      store.teams.listTeams(cohort.id),
-      store.cohorts.listIdeas(cohort.id),
-      store.ranking.listFinalSelections(cohort.id),
-    ]);
+  // Everything the submission platform needs. Always available.
+  const [submissions, teams, ideas] = await Promise.all([
+    store.submissions.listSubmissions(cohort.id),
+    store.teams.listTeams(cohort.id),
+    store.cohorts.listIdeas(cohort.id),
+  ]);
+
+  // Judging data is fetched ONLY when the deployment can produce it. The whole
+  // bundle is null rather than a set of zeroes: "0 assessments done" reads as
+  // "queued nothing", which is a different and misleading claim from "judging
+  // is not configured".
+  const capabilities = storeCapabilities(store);
+  const judgingAvailable = capabilities.assessment && capabilities.ranking;
+
+  const judging = judgingAvailable
+    ? await (async () => {
+        const [stats, snapshot, flags, disqualifications, selections] = await Promise.all([
+          store.assessment.getQueueStats(cohort.id),
+          store.ranking.getCurrentSnapshot(cohort.id),
+          store.assessment.listManualReviewFlags(cohort.id),
+          store.assessment.listDisqualifications(cohort.id),
+          store.ranking.listFinalSelections(cohort.id),
+        ]);
+        return { stats, snapshot, flags, disqualifications, selections };
+      })()
+    : null;
 
   const deadline = evaluateDeadline(cohort.day13DeadlineAt);
-  const shortlistWindow = evaluateShortlistWindow(cohort.day13DeadlineAt, stats.projectedCompletionAt);
+  const shortlistWindow = evaluateShortlistWindow(
+    cohort.day13DeadlineAt,
+    judging?.stats.projectedCompletionAt ?? null,
+  );
 
   const finalSubmissions = submissions.filter(
     (s) => s.submission.status === 'locked' || s.submission.status === 'submitted',
   );
   const drafts = submissions.filter((s) => s.submission.status === 'draft');
-  const openFlags = flags.filter((f) => f.status === 'open');
-  const proposedDqs = disqualifications.filter((d) => d.status === 'proposed');
+  const openFlags = judging?.flags.filter((f) => f.status === 'open') ?? [];
+  const proposedDqs = judging?.disqualifications.filter((d) => d.status === 'proposed') ?? [];
   const failed = submissions.filter((s) => s.stage === 'failed');
+  const snapshot = judging?.snapshot ?? null;
 
   const checklist = buildChecklist({
     cohort,
     ideaCount: ideas.length,
     teamCount: teams.length,
     finalSubmissionCount: finalSubmissions.length,
-    completedAssessments: stats.completed,
+    completedAssessments: judging?.stats.completed ?? 0,
     hasSnapshot: Boolean(snapshot),
-    finalistCount: selections.length,
+    finalistCount: judging?.selections.length ?? 0,
   });
 
   const currentStep = checklist.find((item) => item.state === 'current');
@@ -147,13 +170,25 @@ export default async function AdminOverviewPage() {
           {currentStep?.href && (
             <Link
               href={currentStep.href}
-              className="rounded-[10px] bg-brand px-5 py-2.5 text-sm font-bold text-black transition-colors hover:bg-brand-hover"
+              className="rounded-[10px] bg-brand px-5 py-2.5 text-sm font-bold text-on-accent transition-colors hover:bg-brand-hover"
             >
               {currentStep.cta}
             </Link>
           )}
         </div>
       </Card>
+
+      <ReceiptLookup csrfToken={session.csrfToken} />
+
+      {!judgingAvailable && (
+        <Alert tone="info" className="mb-8" testId="judging-unavailable">
+          <p className="font-semibold">{JUDGING_UNAVAILABLE_MESSAGE}</p>
+          <p className="mt-2">
+            Everything up to that point works normally — cohorts, ideas, teams, access codes and
+            submissions. The judging steps below stay greyed out until it is enabled.
+          </p>
+        </Alert>
+      )}
 
       {/* Run this cohort — the operational sequence, made explicit. */}
       <Card className="mb-8" testId="cohort-checklist">
@@ -179,9 +214,9 @@ export default async function AdminOverviewPage() {
                 className={cn(
                   'flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold',
                   item.state === 'complete'
-                    ? 'bg-brand text-black'
+                    ? 'bg-brand text-on-accent'
                     : item.state === 'current'
-                      ? 'border border-brand text-brand'
+                      ? 'border border-brand text-brand-text'
                       : 'border border-line text-muted',
                 )}
               >
@@ -230,7 +265,11 @@ export default async function AdminOverviewPage() {
         <Stat label="Teams invited" value={teams.length} />
         <Stat label="Drafts" value={drafts.length} />
         <Stat label="Final submissions" value={finalSubmissions.length} tone="accent" />
-        <Stat label="Assessments done" value={stats.completed} hint={`of ${stats.total} queued`} />
+        <Stat
+          label="Assessments done"
+          value={judging ? judging.stats.completed : '—'}
+          hint={judging ? `of ${judging.stats.total} queued` : 'Judging not configured'}
+        />
         <Stat
           label="Needs attention"
           value={openFlags.length + proposedDqs.length + failed.length}
@@ -239,7 +278,9 @@ export default async function AdminOverviewPage() {
         <Stat
           label="Shortlist"
           value={snapshot ? `Top ${Math.min(snapshot.shortlistTarget, snapshot.entries.length)}` : '—'}
-          hint={snapshot ? `${snapshot.eligibleCount} eligible` : 'Not generated'}
+          hint={
+            judging ? (snapshot ? `${snapshot.eligibleCount} eligible` : 'Not generated') : 'Judging not configured'
+          }
         />
       </div>
 
@@ -302,7 +343,7 @@ export default async function AdminOverviewPage() {
             href={`/admin/cohorts/${cohort.id}/teams`}
             className="rounded-[10px] border border-line bg-surface-soft px-4 py-2.5 text-sm font-semibold text-ink transition-colors hover:border-brand-edge"
           >
-            Download invite links
+            Teams and access codes
           </Link>
           {cohort.status === 'open' && (
             <Link
@@ -395,14 +436,14 @@ function buildChecklist(input: {
       cta: 'Review ideas',
     },
     {
-      title: 'Import teams and generate invite links',
-      detail: `${input.teamCount} team${input.teamCount === 1 ? '' : 's'} imported. One private link each.`,
+      title: 'Import learners and issue access codes',
+      detail: `${input.teamCount} team${input.teamCount === 1 ? '' : 's'} imported. One shared code each.`,
       href: `/admin/cohorts/${cohort.id}/teams`,
       cta: 'Manage teams',
     },
     {
       title: 'Open submissions',
-      detail: 'Teams with valid invite links can edit and submit.',
+      detail: 'Teams holding a valid access code can edit and submit.',
       href: '/admin/cohorts',
       cta: 'Change status',
     },

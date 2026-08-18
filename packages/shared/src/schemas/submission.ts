@@ -135,7 +135,7 @@ export const teamStepSchema = z.object({
   leadEmail: emailSchema,
   leadPhone: phoneSchema,
   members: z
-    .array(teamMemberSchema)
+    .array(teamMemberSchema, { required_error: 'Add at least one active team member.' })
     .min(1, 'Add at least one active team member.')
     .max(12, 'A team may have at most 12 members.'),
 });
@@ -149,7 +149,8 @@ export type TeamStep = z.infer<typeof teamStepSchema>;
 // --------------------------------------------------------------------------
 
 export const productStepSchema = z.object({
-  ideaId: z.string().min(1, 'Choose one approved product idea.'),
+  ideaId: z.string({ required_error: 'Choose one approved product idea.' })
+    .min(1, 'Choose one approved product idea.'),
   productName: shortText(80, 'Product name'),
   primaryUser: longText(10, 200, 'Primary user'),
   exactProblem: longText(30, 600, 'The exact problem'),
@@ -182,9 +183,14 @@ export const testStepEntrySchema = z.object({
 export const liveProductStepSchema = z
   .object({
     productUrl: productUrlSchema,
-    loginRequired: z.boolean(),
+    loginRequired: z.boolean({
+      required_error: 'Say whether your product needs a login to use.',
+      invalid_type_error: 'Say whether your product needs a login to use.',
+    }),
     coreTestSteps: z
-      .array(testStepEntrySchema)
+      .array(testStepEntrySchema, {
+        required_error: 'Describe the steps a judge should follow to use your product.',
+      })
       .min(2, 'Describe at least two steps so the judge can follow your core flow.')
       .max(15, 'Describe at most 15 steps — focus on the core flow.'),
     safeSampleInputs: longText(10, 800, 'Safe sample inputs'),
@@ -242,7 +248,9 @@ export const MAX_DECK_BYTES = 25 * 1024 * 1024;
 export const ALLOWED_DECK_MIME = 'application/pdf';
 
 export const artifactsStepSchema = z.object({
-  deckArtifactId: z.string().min(1, 'Upload your pitch deck as a PDF.'),
+  deckArtifactId: z
+    .string({ required_error: 'Upload your pitch deck as a PDF.' })
+    .min(1, 'Upload your pitch deck as a PDF.'),
   demoVideoUrl: demoVideoUrlSchema,
   demoUnderThreeMinutes: z.literal(true, {
     errorMap: () => ({ message: 'Confirm that your demo video is three minutes or shorter.' }),
@@ -306,7 +314,9 @@ export const bugFixedSchema = z.object({
 
 export const learningStepSchema = z.object({
   bugsFixed: z
-    .array(bugFixedSchema)
+    .array(bugFixedSchema, {
+      required_error: 'Describe exactly three important bugs you found and fixed.',
+    })
     .length(3, 'Describe exactly three important bugs you found and fixed.'),
   deliberatelyExcluded: longText(15, 500, 'Deliberately excluded feature'),
   majorTradeoff: longText(20, 600, 'Major trade-off'),
@@ -506,13 +516,54 @@ export function evaluateCompleteness(draft: unknown): SubmissionCompleteness {
       complete: false,
       issues: result.error.issues.map((issue) => ({
         path: issue.path.join('.'),
-        message: issue.message,
+        message: humaniseIssue(issue.path, issue.message),
       })),
     };
   });
 
   const totalIssues = steps.reduce((sum, s) => sum + s.issues.length, 0);
   return { complete: steps.every((s) => s.complete), steps, totalIssues };
+}
+
+/**
+ * Turn a schema complaint into something a learner can act on.
+ *
+ * Zod's defaults are written for whoever wrote the schema: a missing field
+ * reports `Required`, and a null reports `Expected string, received null`.
+ * Shown on a submission form at 23:50 those say nothing about which answer is
+ * missing or what to do about it.
+ *
+ * Most fields carry their own message. This is the catch-all, so a field added
+ * later cannot leak raw schema text to a learner by being forgotten.
+ */
+export function humaniseIssue(path: (string | number)[], message: string): string {
+  const looksRaw =
+    /^required$/i.test(message) ||
+    /^expected .+, received/i.test(message) ||
+    /^invalid input$/i.test(message) ||
+    /^invalid_type/i.test(message);
+
+  if (!looksRaw) return message;
+
+  const field = fieldLabel(path);
+  return field ? `${field} is required.` : 'This answer is required.';
+}
+
+/** `live.coreTestSteps.0.action` → "Action". Indexes and step prefixes are noise to a learner. */
+function fieldLabel(path: (string | number)[]): string | null {
+  const named = path.filter((part): part is string => typeof part === 'string');
+  const last = named[named.length - 1];
+  if (!last) return null;
+
+  const spaced = last
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[._-]+/g, ' ')
+    .trim()
+    .toLowerCase();
+
+  const sentence = spaced.charAt(0).toUpperCase() + spaced.slice(1);
+  // Abbreviations that look wrong in sentence case.
+  return sentence.replace(/\burl\b/gi, 'URL').replace(/\bai\b/gi, 'AI');
 }
 
 /** The exact phrase a team must type to submit. Case-sensitive by design. */

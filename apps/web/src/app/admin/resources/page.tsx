@@ -1,4 +1,4 @@
-import { getStore } from '@/lib/store';
+import { getStoreAsync } from '@/lib/store';
 import { requireAdmin } from '@/server/admin-auth';
 import { Badge, Card, CardHeader, PageHeading } from '@/components/ui';
 
@@ -14,7 +14,7 @@ export const dynamic = 'force-dynamic';
  */
 export default async function ResourcesPage() {
   await requireAdmin();
-  const store = getStore();
+  const store = await getStoreAsync();
   const resources = await store.resources.listResources(null);
 
   const participant = resources.filter((r) => r.isParticipantVisible);

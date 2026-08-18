@@ -14,7 +14,7 @@ export default async function AdminLoginPage() {
   return (
     <div className="flex min-h-screen items-center justify-center px-6 py-12">
       <div className="w-full max-w-md">
-        <p className="text-xs font-semibold uppercase tracking-widest text-brand">Outskill</p>
+        <p className="text-xs font-semibold uppercase tracking-widest text-brand-text">Outskill</p>
         <h1 className="mt-1 text-2xl font-bold">Hackathon Judge — internal sign in</h1>
         <p className="mt-2 text-sm text-muted">
           One shared account for the Outskill team. Actions are logged as{' '}

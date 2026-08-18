@@ -1,5 +1,6 @@
 import Link from 'next/link';
-import { getStore } from '@/lib/store';
+import { JUDGING_UNAVAILABLE_MESSAGE, storeCapabilities } from '@ohj/shared';
+import { getStoreAsync } from '@/lib/store';
 import { requireAdmin } from '@/server/admin-auth';
 import { clearFinalSelectionAction, setFinalSelectionAction } from '@/server/admin-actions';
 import { AdminForm } from '@/components/admin-form';
@@ -29,7 +30,25 @@ export const dynamic = 'force-dynamic';
  */
 export default async function FinalistsPage() {
   const session = await requireAdmin();
-  const store = getStore();
+  const store = await getStoreAsync();
+
+  // Judging is not available in this deployment (Phase B). Every read below
+  // reaches a gated repository, which throws rather than returning an empty
+  // result that would render as a real answer.
+  if (!storeCapabilities(store).ranking) {
+    return (
+      <div>
+        <PageHeading title="Finalists" description="The four finalists, chosen by a person." />
+        <Alert tone="info" testId="judging-unavailable">
+          <p className="font-semibold">{JUDGING_UNAVAILABLE_MESSAGE}</p>
+          <p className="mt-2">
+            Teams can still submit, and cohorts, access codes and submissions all work normally.
+            Nothing is lost by waiting.
+          </p>
+        </Alert>
+      </div>
+    );
+  }
   const cohorts = await store.cohorts.listCohorts();
   const cohort =
     cohorts.find((c) => c.status === 'judging' || c.status === 'finalised') ?? cohorts[0];
@@ -68,7 +87,7 @@ export default async function FinalistsPage() {
           action={
             <Link
               href="/admin/ranking"
-              className="rounded-[10px] bg-brand px-4 py-2.5 text-sm font-bold text-black"
+              className="rounded-[10px] bg-brand px-4 py-2.5 text-sm font-bold text-on-accent"
             >
               Go to shortlist
             </Link>
@@ -101,7 +120,7 @@ export default async function FinalistsPage() {
                     <div className="mb-4 flex items-center gap-3">
                       <span
                         aria-hidden="true"
-                        className="flex h-8 w-8 items-center justify-center rounded-full border border-brand text-sm font-bold text-brand"
+                        className="flex h-8 w-8 items-center justify-center rounded-full border border-brand text-sm font-bold text-brand-text"
                       >
                         {position}
                       </span>
@@ -147,7 +166,7 @@ export default async function FinalistsPage() {
                     {current && (
                       <Link
                         href={`/admin/submissions/${current.submissionId}`}
-                        className="mt-3 inline-block text-sm font-semibold text-brand underline underline-offset-4"
+                        className="mt-3 inline-block text-sm font-semibold text-brand-text underline underline-offset-4"
                       >
                         Review evidence for Group {current.groupNumber}
                       </Link>
@@ -184,7 +203,7 @@ export default async function FinalistsPage() {
                   <Td className="font-mono">
                     <Link
                       href={`/admin/submissions/${selection.submissionId}`}
-                      className="text-brand underline underline-offset-4"
+                      className="text-brand-text underline underline-offset-4"
                     >
                       {selection.groupNumber}
                     </Link>
@@ -247,7 +266,7 @@ export default async function FinalistsPage() {
                     <Td>
                       <Link
                         href={`/admin/submissions/${entry.submissionId}`}
-                        className="text-sm font-semibold text-brand underline underline-offset-4"
+                        className="text-sm font-semibold text-brand-text underline underline-offset-4"
                       >
                         View evidence
                       </Link>

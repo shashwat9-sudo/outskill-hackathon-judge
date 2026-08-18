@@ -38,10 +38,14 @@ import type {
   SubmissionCredentials,
   SubmissionDeclarations,
   SubmissionEvent,
+  ParticipantSession,
   SystemSetting,
   Team,
+  TeamAccessCode,
+  TeamActivity,
   TeamInvite,
   TeamMember,
+  VerificationAttempt,
   TestPlan,
   TestPlanStep,
 } from '../types';
@@ -79,6 +83,10 @@ export interface MemoryDatabase {
   teamInvites: TeamInvite[];
   /** Demo-only: plaintext invite tokens, so the demo can print working links. */
   demoInviteTokens: Map<string, string>;
+  accessCodes: TeamAccessCode[];
+  participantSessions: ParticipantSession[];
+  teamActivity: TeamActivity[];
+  verificationAttempts: VerificationAttempt[];
   submissions: Submission[];
   artifacts: SubmissionArtifact[];
   credentials: SubmissionCredentials[];
@@ -116,6 +124,10 @@ export function createEmptyDatabase(): MemoryDatabase {
     teamMembers: [],
     teamInvites: [],
     demoInviteTokens: new Map(),
+    accessCodes: [],
+    participantSessions: [],
+    teamActivity: [],
+    verificationAttempts: [],
     submissions: [],
     artifacts: [],
     credentials: [],
@@ -165,11 +177,16 @@ const SCENARIOS_WITH_SCORES: DemoScenario[] = ['complete', 'login_required', 'lo
  * hard-coded, so the fixture exercises the real ranking code.
  */
 export function seedDemoDatabase(db: MemoryDatabase): void {
-  const cohort: Cohort = { ...DEMO_COHORT };
+  const cohort: Cohort = {
+    ...DEMO_COHORT,
+    closedAt: null,
+    closureType: null,
+    acceptingUntil: null,
+  };
   db.cohorts.push(cohort);
 
   // Ideas
-  IDEA_SEEDS.forEach((seed) => {
+  IDEA_SEEDS.forEach((seed, index) => {
     db.ideas.push({
       id: id(`idea-${seed.slug}`),
       cohortId: cohort.id,
@@ -185,6 +202,13 @@ export function seedDemoDatabase(db: MemoryDatabase): void {
       unsafeInterpretations: seed.unsafeInterpretations,
       displayOrder: seed.displayOrder,
       isActive: true,
+      // Most seeded definitions ship approved so the demo pipeline is complete.
+      // The first stays in draft on purpose: an operator who never sees that
+      // state will not know to look for it on a real cohort, where every
+      // expanded definition starts unapproved (ADR-025).
+      definitionStatus: index === 0 ? 'draft' : 'approved',
+      definitionApprovedAt: index === 0 ? null : DEMO_COHORT.createdAt,
+      definitionApprovedBy: index === 0 ? null : 'demo-fixture',
       createdAt: DEMO_COHORT.createdAt,
       updatedAt: DEMO_COHORT.createdAt,
     });
@@ -334,6 +358,7 @@ export function seedDemoDatabase(db: MemoryDatabase): void {
       leadName: `Group ${seed.groupNumber} Lead (Demo)`,
       leadEmail: demoEmail(seed.groupNumber),
       leadPhone: demoPhone(seed.groupNumber),
+      whatsappLink: null,
       status: 'active',
       importedAt: DEMO_COHORT.createdAt,
       createdAt: DEMO_COHORT.createdAt,
@@ -345,6 +370,7 @@ export function seedDemoDatabase(db: MemoryDatabase): void {
         id: id(`member-${seed.groupNumber}-${index}`),
         teamId,
         fullName: `${role} · Group ${seed.groupNumber}`,
+        email: null,
         contribution: MEMBER_CONTRIBUTIONS[index % MEMBER_CONTRIBUTIONS.length] as string,
         displayOrder: index,
         isActive: true,
@@ -545,6 +571,9 @@ function buildSubmission(input: {
     apisUsed: incomplete ? null : 'LLM API for suggestions.',
     externalTemplates: incomplete ? null : 'Started from the builder default template; all product logic is ours.',
 
+    version: 1,
+    lastEditedBy: incomplete ? 'Builder One (Demo)' : 'Team Lead (Demo)',
+    submittedByName: incomplete ? null : 'Team Lead (Demo)',
     draftPayload: incomplete
       ? {
           team: { groupNumber: input.groupNumber },

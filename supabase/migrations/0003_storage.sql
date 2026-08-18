@@ -43,7 +43,25 @@ on conflict (id) do update
 -- authorisation check always happens in our code before a URL exists.
 -- --------------------------------------------------------------------------
 
-alter table storage.objects enable row level security;
+-- Enabling RLS on storage.objects is a no-op on hosted Supabase: the table
+-- ships with RLS already on, and it is owned by `supabase_storage_admin`, so an
+-- unconditional ALTER run as `postgres` fails with "must be owner of table
+-- objects" and takes the whole migration down with it.
+--
+-- Guarded rather than deleted. Deleting it would silently leave RLS off on any
+-- environment where it happened to be off, which is a security regression that
+-- nothing would report. This way the statement runs only where it is genuinely
+-- needed, and where it is needed we want it to fail loudly.
+do $$
+begin
+  if not exists (
+    select 1 from pg_tables
+    where schemaname = 'storage' and tablename = 'objects' and rowsecurity
+  ) then
+    alter table storage.objects enable row level security;
+  end if;
+end;
+$$;
 
 -- Participants may upload their own deck into their own submission's prefix.
 -- The path convention is <cohort_id>/<submission_id>/<filename>.

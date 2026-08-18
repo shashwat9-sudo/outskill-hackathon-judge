@@ -1,41 +1,22 @@
 import { expect, test, type Page } from '@playwright/test';
+import { openDraftPortal, openScenario } from './learner-support';
 
 /**
  * Learner journey and isolation.
  *
  * The negative tests matter more than the positive ones: a participant reaching
  * judging information is the single most damaging failure this system can have.
- */
-
-/**
- * The draft team — its form is editable, so the steps are all reachable.
- * Waits for the form to land, so nothing reads the page mid-navigation.
- */
-async function openDraftPortal(page: Page): Promise<void> {
-  await page.goto(await portalHref(page, 'incomplete'));
-  await expect(page.getByTestId('submission-stepper').first()).toBeVisible();
-}
-
-/**
- * Resolve a scenario's invite URL, then navigate to it directly.
  *
- * A hard load matters for the isolation checks: a client-side navigation keeps
- * the PREVIOUS document's inlined payload in the page, so `page.content()`
- * would still contain the demo home's copy and report a leak that is not there.
+ * Entry runs through `learner-support`, which also gets past the first-run
+ * walkthrough. A hard load matters for the isolation checks: a client-side
+ * navigation keeps the PREVIOUS document's inlined payload in the page, so
+ * `page.content()` would still contain the demo home's copy and report a leak
+ * that is not there.
  */
-async function portalHref(page: Page, scenario: string): Promise<string> {
-  await page.goto('/');
-  const href = await page
-    .locator(`[data-testid="demo-scenario-card"][data-scenario="${scenario}"]`)
-    .getByRole('link', { name: 'Open learner portal' })
-    .getAttribute('href');
-  expect(href, `no invite link for the ${scenario} scenario`).toBeTruthy();
-  return href as string;
-}
 
 /** The complete team — already finally submitted, so it shows the receipt. */
 async function openSubmittedPortal(page: Page): Promise<void> {
-  await page.goto(await portalHref(page, 'complete'));
+  await openScenario(page, 'complete');
   await expect(page.getByTestId('submission-receipt')).toBeVisible();
 }
 
@@ -56,7 +37,7 @@ test.describe('learner portal', () => {
       page.getByRole('heading', { name: 'Submit your hackathon product' }),
     ).toBeVisible();
     await expect(
-      page.getByText(/Complete the six steps below\. Your progress is saved automatically/),
+      page.getByText(/There are 6 simple steps\. Your work saves as you go/),
     ).toBeVisible();
   });
 
@@ -100,13 +81,14 @@ test.describe('learner portal', () => {
     await openDraftPortal(page);
     const stepper = page.getByTestId('submission-stepper').first();
 
+    // The same sentences the tour uses, read from one source.
     const intros = [
-      'Confirm the people who actively built this submission.',
-      'Select the approved challenge and describe the problem and product promise.',
-      'Tell the automated judge how to safely access and test your core workflow.',
-      'Upload the final pitch deck and link the short product walkthrough.',
-      'Show how your team scoped, tested and improved the product during the hackathon.',
-      'Check everything below, agree to the declarations, then make your final submission.',
+      'Tell us who built the project and what each person worked on.',
+      'Tell us who your product is for, what problem you are solving, and what you built.',
+      'Share your working product and tell us the main flow we should test.',
+      'Upload your pitch deck and share your short demo video.',
+      'Tell us what went wrong, what you fixed, what you learned, and what you would improve next.',
+      "Check everything once. Final Submit locks your submission, so only use it when you're done.",
     ];
 
     for (let i = 0; i < 6; i++) {
@@ -130,7 +112,7 @@ test.describe('learner portal', () => {
     await openDraftPortal(page);
     await page.getByTestId('submission-stepper').first().getByRole('button').nth(2).click();
 
-    await page.getByLabel('Our product requires a login').check();
+    await page.getByLabel('Does someone need to log in to use it?').check();
     await expect(page.getByLabel('Demo password')).toHaveAttribute('type', 'password');
   });
 
@@ -143,13 +125,19 @@ test.describe('learner portal', () => {
     await expect(page.getByRole('link', { name: 'Download submission instructions' })).toBeVisible();
   });
 
-  test('groups missing fields at the top of the review step', async ({ page }) => {
+  test('reviews as a checklist, with every missing item listed and clickable', async ({ page }) => {
     await openDraftPortal(page);
     await page.getByTestId('submission-stepper').first().getByRole('button').nth(5).click();
 
-    await expect(page.getByText('Not ready to submit yet')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Edit section' }).first()).toBeVisible();
-    await expect(page.getByText('This locks your submission')).toBeVisible();
+    const checklist = page.getByTestId('review-checklist');
+    await expect(checklist).toBeVisible();
+    // One row per content step; declarations are shown as themselves below.
+    await expect(checklist.locator('[data-testid^="review-row-"]')).toHaveCount(5);
+    await expect(page.getByRole('button', { name: 'Fix this' }).first()).toBeVisible();
+    await expect(page.getByText('Before you submit')).toBeVisible();
+    await expect(
+      page.getByText('You can edit your answers until you use Final Submit'),
+    ).toBeVisible();
   });
 
   test('offers Previous, Save draft and Save and continue', async ({ page }) => {
@@ -240,23 +228,20 @@ test.describe('learner isolation', () => {
     }
   });
 
-  test('a participant cannot read another team’s submission', async ({ page }) => {
-    await page.goto('/');
-    const links = await page.getByRole('link', { name: 'Open learner portal' }).all();
-    const first = (await links[0]?.getAttribute('href')) as string;
-    const second = (await links[1]?.getAttribute('href')) as string;
-    expect(first).not.toBe(second);
+  test('a participant cannot read another team\u2019s submission', async ({ page }) => {
+    await openScenario(page, 'incomplete');
+    const firstGroup = await page.getByRole('banner').getByText(/^Group \d+$/).textContent();
 
-    await page.goto(first);
-    const firstGroup = await page.getByText(/^Group \d+$/).first().textContent();
-    await page.goto(second);
-    const secondGroup = await page.getByText(/^Group \d+$/).first().textContent();
+    await openScenario(page, 'inaccessible');
+    const secondGroup = await page.getByRole('banner').getByText(/^Group \d+$/).textContent();
 
+    // Each session resolves to exactly one team, and switching identity takes a
+    // fresh invite — a session is never widened by visiting another link.
     expect(firstGroup).not.toBe(secondGroup);
   });
 
   test('stored demo credentials never reach the learner page', async ({ page }) => {
-    await page.goto(await portalHref(page, 'login_required'));
+    await openScenario(page, 'login_required');
 
     const body = await page.content();
     expect(body).not.toContain('DemoReviewer!2026');

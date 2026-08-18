@@ -17,7 +17,7 @@ const STORAGE_KEY = 'ohj.onboarding.dismissed.v1';
 const STEPS = [
   'Configure the cohort',
   'Review product ideas',
-  'Add teams and share invite links',
+  'Import learners and issue access codes',
   'Open submissions',
   'Start automated judging',
   'Review the top 10 and select four finalists',
@@ -75,7 +75,7 @@ export function OnboardingPanel({
           <li key={step} className="flex items-start gap-2.5 text-sm text-ink">
             <span
               aria-hidden="true"
-              className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-brand-edge text-xs font-bold text-brand"
+              className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-brand-edge text-xs font-bold text-brand-text"
             >
               {index + 1}
             </span>
@@ -87,7 +87,7 @@ export function OnboardingPanel({
       <div className="mt-6 flex flex-wrap gap-3">
         <Link
           href={cohortId ? `/admin/cohorts/${cohortId}/ideas` : '/admin/cohorts'}
-          className="rounded-[10px] bg-brand px-4 py-2.5 text-sm font-bold text-black transition-colors hover:bg-brand-hover"
+          className="rounded-[10px] bg-brand px-4 py-2.5 text-sm font-bold text-on-accent transition-colors hover:bg-brand-hover"
         >
           Start setup
         </Link>

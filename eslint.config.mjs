@@ -15,6 +15,8 @@ export default tseslint.config(
     ignores: [
       '**/node_modules/**',
       '**/.next/**',
+      // Alternate build outputs (NEXT_DIST_DIR) — generated, never authored.
+      '**/.next-*/**',
       '**/dist/**',
       '**/coverage/**',
       '**/playwright-report/**',
@@ -62,16 +64,32 @@ export default tseslint.config(
 
   // Tests may be looser about assertions and non-null access.
   {
-    files: ['**/*.test.ts', '**/*.test.tsx', 'e2e/**/*.ts'],
+    files: ['**/*.test.ts', '**/*.test.tsx', 'e2e/**/*.ts', 'e2e-staging/**/*.ts'],
     rules: {
       '@typescript-eslint/no-non-null-assertion': 'off',
       '@typescript-eslint/no-explicit-any': 'off',
     },
   },
 
+  // The staging suite measures a deployment and reports what it measured.
+  // Printing the F-17 success rate and its latency spread is the deliverable,
+  // not debugging left behind.
+  {
+    files: ['e2e-staging/**/*.ts'],
+    rules: { 'no-console': 'off' },
+  },
+
   // The fixture app deliberately contains defects and inline scripts.
   {
     files: ['apps/worker/src/testing/fixture-app/**'],
+    rules: { 'no-console': 'off' },
+  },
+
+  // Operator scripts are run by hand from a terminal; printing a readable
+  // report IS their output. The rule stays on everywhere it protects a server
+  // log from accidental noise.
+  {
+    files: ['scripts/**/*.ts', 'scripts/**/*.mjs'],
     rules: { 'no-console': 'off' },
   },
 );

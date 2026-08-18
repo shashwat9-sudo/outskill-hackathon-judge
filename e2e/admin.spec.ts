@@ -112,7 +112,7 @@ test.describe('admin overview', () => {
     for (const step of [
       'Configure cohort',
       'Review approved ideas',
-      'Import teams and generate invite links',
+      'Import learners and issue access codes',
       'Open submissions',
       'Close submissions and start judging',
       'Review the top 10',
@@ -189,8 +189,17 @@ test.describe('cohorts', () => {
     await signIn(page);
     await adminNav(page).getByRole('link', { name: 'Cohorts' }).click();
 
-    await expect(page.getByText('Learners can view their entries but cannot edit or submit.')).toBeVisible();
-    await expect(page.getByText('No further participant changes. Judging can begin.')).toBeVisible();
+    // Reversible transitions live on the lifecycle card...
+    await expect(
+      page.getByText('Learners can view their entries but cannot edit or submit.'),
+    ).toBeVisible();
+
+    // ...while closing and reopening have their own panel, because neither is a
+    // status change to the person pressing it.
+    await expect(page.getByTestId('closure-controls').first()).toBeVisible();
+    await expect(
+      page.getByText('Every team loses the ability to edit or submit the moment you press this.'),
+    ).toBeVisible();
   });
 });
 

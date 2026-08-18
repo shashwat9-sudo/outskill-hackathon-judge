@@ -1,7 +1,7 @@
 import { notFound } from 'next/navigation';
 import Link from 'next/link';
 import { formatInTimezone } from '@ohj/shared';
-import { getStore } from '@/lib/store';
+import { getStoreAsync } from '@/lib/store';
 import { requireAdmin } from '@/server/admin-auth';
 import { Badge } from '@/components/ui';
 import { SubmissionDetail } from './submission-detail';
@@ -18,7 +18,7 @@ export const dynamic = 'force-dynamic';
 export default async function SubmissionDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const session = await requireAdmin();
-  const store = getStore();
+  const store = await getStoreAsync();
 
   const detail = await store.submissions.getSubmissionDetail(id);
   if (!detail) notFound();
@@ -28,7 +28,7 @@ export default async function SubmissionDetailPage({ params }: { params: Promise
       <div>
         <Link
           href={`/admin/cohorts/${detail.cohort.id}/submissions`}
-          className="text-sm text-brand underline"
+          className="text-sm text-brand-text underline"
         >
           ← All submissions
         </Link>

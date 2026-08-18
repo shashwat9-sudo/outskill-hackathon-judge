@@ -450,3 +450,46 @@ describe('redaction before the provider boundary', () => {
     expect(() => assertNoCredentials({ text: 'a normal description' }, ['DemoReviewer!2026'])).not.toThrow();
   });
 });
+
+describe('a browser that never reached the product', () => {
+  it('is a review case, not a score', () => {
+    // Seen once, during the controlled judging run. A navigation guard blocked
+    // every load and the pipeline still produced 37/100 at 0.83 confidence with
+    // no flag raised. Every assertion had failed because there was no page, the
+    // console was quiet because nothing ran, and the accessibility scan found
+    // nothing to scan — and that was scored as if it described the team.
+    const runs = [
+      { steps: [{ action: 'navigate', status: 'failed' }, { action: 'click', status: 'failed' }] },
+      { steps: [{ action: 'navigate', status: 'failed' }] },
+    ];
+    const navigationSucceeded = runs.some((run) =>
+      run.steps.some((step) => step.action === 'navigate' && step.status === 'passed'),
+    );
+    expect(navigationSucceeded).toBe(false);
+  });
+
+  it('is distinguished from a product that loaded and then failed', () => {
+    // A product that opens and then breaks IS evidence about the submission,
+    // and must still be scored rather than parked for a human.
+    const runs = [
+      { steps: [{ action: 'navigate', status: 'passed' }, { action: 'click', status: 'failed' }] },
+    ];
+    const navigationSucceeded = runs.some((run) =>
+      run.steps.some((step) => step.action === 'navigate' && step.status === 'passed'),
+    );
+    expect(navigationSucceeded).toBe(true);
+  });
+
+  it('is wired into the pipeline, not only described here', async () => {
+    // The decision itself now lives in `classifyBrowserOutcome` and is driven
+    // directly by `platform-failure.test.ts`. What is still worth checking here
+    // is that the stage actually consults it and routes on the answer — an
+    // extracted function nobody calls would pass every test in that file.
+    const { readFile } = await import('node:fs/promises');
+    const source = await readFile(new URL('./pipeline.ts', import.meta.url), 'utf8');
+    expect(source).toMatch(/browser_never_reached_product/);
+    expect(source).toMatch(/const outcome = classifyBrowserOutcome\(desktop, mobile\)/);
+    expect(source).toMatch(/if \(outcome\.nextStage === 'manual_review'\)/);
+    expect(source).toMatch(/return \{ stage: 'manual_review', error: outcome\.reason as string \}/);
+  });
+});

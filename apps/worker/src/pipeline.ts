@@ -27,7 +27,8 @@ import {
 import {
   artifactAnalysisPrompt,
   artifactAnalysisSchema,
-  assertNoCredentials,
+  assertDispatchAllowed,
+  assertNoCredentialShapedContent,
   consistencyOutputSchema,
   consistencyPrompt,
   detectInjection,
@@ -47,6 +48,21 @@ import { runPreflight } from './preflight';
 import { extractPdfText } from './pdf';
 import { runBrowserPlan, summariseRun, type BrowserRunResult } from './browser-runner';
 
+/**
+ * Every personal name the system already holds for a submission.
+ *
+ * Passed to redaction, which cannot detect a name by pattern — only by knowing
+ * it. Nulls are dropped rather than coerced to '': a team imported from the
+ * learner allocation sheet has no lead name, and `redactKnownNames` splits
+ * every entry it is given, so a null would throw before anything was redacted.
+ */
+function knownNames(detail: { team: { leadName: string | null }; members: { fullName: string }[] }): string[] {
+  return [detail.team.leadName, ...detail.members.map((m) => m.fullName)].filter(
+    (name): name is string => typeof name === 'string' && name.trim().length > 0,
+  );
+}
+
+
 export interface StageContext {
   store: DataStore;
   ai: AiClient;
@@ -54,11 +70,62 @@ export interface StageContext {
   workerId: string;
   evidenceRoot: string;
   log: Logger;
+  /**
+   * Only the controlled judging run sets this, to reach a fixture served from
+   * this machine. The worker never does — see `worker-security.test.ts`.
+   */
+  allowPrivateProductUrlForControlledRun?: boolean;
+  /**
+   * Declare that this job's content is synthetic.
+   *
+   * `synthetic_only` decides what may leave for a provider by asking the store
+   * driver, and treats every Postgres cohort as real — deliberately, because
+   * that is where learner work lives and a wrong answer sends someone's deck to
+   * a free tier.
+   *
+   * The controlled judging run is the one case that rule cannot see: a Postgres
+   * engine holding nothing but fixtures. Rather than teach the guard to guess,
+   * the caller states it, and only that caller may. The worker never sets it —
+   * `worker-security.test.ts` asserts so.
+   */
+  contentIsSyntheticForControlledRun?: boolean;
 }
 
 export interface StageOutcome {
   stage: AssessmentStage;
   error?: string;
+}
+
+/**
+ * May this job's content reach an external model?
+ *
+ * Called before every provider call, not once at startup: the mode can change
+ * between a worker starting and a job being claimed, and a check that ran only
+ * at boot would let a restart-free worker keep sending.
+ *
+ * "Synthetic" is derived from the store driver rather than a column on the
+ * cohort. The memory driver *is* the demo fixtures; the Postgres driver holds
+ * real learner work, all of it. That means `synthetic_only` refuses every
+ * Postgres cohort, which is the intended reading — the free tier should not
+ * receive anything out of the production database, whatever it is labelled.
+ *
+ * The demo provider is exempt because it makes no network call at all. There is
+ * no boundary to protect when nothing crosses one.
+ */
+function guardDispatch(
+  job: AssessmentJob,
+  cohort: { id: string; name: string },
+  ctx: StageContext,
+): void {
+  if (ctx.ai.providerName === 'demo') return;
+
+  const isDemoData = ctx.store.driver === 'memory' || ctx.contentIsSyntheticForControlledRun === true;
+  assertDispatchAllowed(ctx.env.AI_EVALUATION_MODE, {
+    isDemoCohort: isDemoData,
+    isSyntheticSubmission: isDemoData,
+    cohortName: cohort.name,
+    correlationId: anonymiseSubmissionId(job.submissionId, cohort.id),
+  });
 }
 
 export async function runStage(job: AssessmentJob, ctx: StageContext): Promise<StageOutcome> {
@@ -96,7 +163,8 @@ async function preflightStage(job: AssessmentJob, ctx: StageContext): Promise<St
   const video = detail.artifacts.find((a) => a.kind === 'demo_video');
   const credentials = await ctx.store.submissions.getCredentials(job.submissionId);
 
-  const outcome = await runPreflight({
+  const outcome = await runPreflight(
+    {
     submissionId: job.submissionId,
     productUrl: detail.submission.productUrl,
     demoVideoUrl: video?.externalUrl ?? null,
@@ -108,8 +176,13 @@ async function preflightStage(job: AssessmentJob, ctx: StageContext): Promise<St
     ideaIsApproved: Boolean(detail.idea?.isActive),
     isComplete: detail.submission.status === 'locked' || detail.submission.status === 'submitted',
     isLate: detail.submission.isLate,
-    attemptNumber: job.attemptCount + 1,
-  });
+      attemptNumber: job.attemptCount + 1,
+    },
+    // Undefined in production, so `runPreflight` applies its defaults.
+    ctx.allowPrivateProductUrlForControlledRun
+      ? { allowPrivateProductUrlForControlledRun: true }
+      : {},
+  );
 
   await ctx.store.assessment.recordPreflight(job.id, outcome.checks);
 
@@ -148,6 +221,7 @@ async function artifactAnalysisStage(job: AssessmentJob, ctx: StageContext): Pro
   if (!detail) return { stage: 'failed', error: 'Submission not found.' };
 
   const anonId = anonymiseSubmissionId(job.submissionId, detail.cohort.id);
+  guardDispatch(job, detail.cohort, ctx);
   const deck = detail.artifacts.find((a) => a.kind === 'deck_pdf');
   const video = detail.artifacts.find((a) => a.kind === 'demo_video');
 
@@ -172,17 +246,27 @@ async function artifactAnalysisStage(job: AssessmentJob, ctx: StageContext): Pro
     ...detectInjection(deckText, 'deck'),
   ];
 
-  // Redaction happens before the payload is built, and the credential assertion
-  // is a structural backstop (ADR-009).
-  const names = [detail.team.leadName, ...detail.members.map((m) => m.fullName)];
+  // Redaction happens before the payload is built (ADR-009).
+  const names = knownNames(detail);
   const redactedWritten = redactDeep(writtenSubmission, names);
   const redactedDeck = redactDeep(deckText, names);
 
-  const credentials = await ctx.store.submissions.revealCredentials(job.submissionId).catch(() => null);
-  assertNoCredentials({ redactedWritten, redactedDeck }, [
-    credentials?.username ?? '',
-    credentials?.password ?? '',
-  ]);
+  // Credentials are NOT decrypted here.
+  //
+  // This used to call revealCredentials purely to assert the plaintext was
+  // absent from the payload. That check created the exposure it was testing
+  // for: the plaintext sat in worker memory at the exact moment an AI payload
+  // was being assembled, so a throw between those lines could have put it in a
+  // stack trace or an error log.
+  //
+  // The real guarantee is structural. The payload below is built from an
+  // explicit field list and there is no credential field in it, so there is no
+  // path for one to be included — which `credential-boundary.test.ts` proves by
+  // walking every argument this stage passes to the model.
+  //
+  // Plaintext is resolved once, in the browser stage, at the moment a form is
+  // actually filled. That is the only place it is needed.
+  assertNoCredentialShapedContent({ redactedWritten, redactedDeck });
 
   const response = await ctx.ai.run({
     promptVersion: artifactAnalysisPrompt.version,
@@ -242,7 +326,8 @@ async function testPlanStage(job: AssessmentJob, ctx: StageContext): Promise<Sta
   if (!detail?.submission.productUrl) return { stage: 'failed', error: 'No product URL.' };
 
   const anonId = anonymiseSubmissionId(job.submissionId, detail.cohort.id);
-  const names = [detail.team.leadName, ...detail.members.map((m) => m.fullName)];
+  guardDispatch(job, detail.cohort, ctx);
+  const names = knownNames(detail);
 
   const response = await ctx.ai.run({
     promptVersion: testPlanPrompt.version,
@@ -330,6 +415,9 @@ async function browserTestingStage(job: AssessmentJob, ctx: StageContext): Promi
     screenshotDir,
     traceDir,
     headless: ctx.env.BROWSER_HEADLESS,
+    // Only the controlled run sets this, and the executor ignores it outright
+    // when NODE_ENV is 'production'.
+    allowPrivateOriginForTesting: ctx.allowPrivateProductUrlForControlledRun === true,
   });
   await persistRun(job.id, desktop, ctx);
 
@@ -338,6 +426,7 @@ async function browserTestingStage(job: AssessmentJob, ctx: StageContext): Promi
     steps: steps.slice(0, 6),
     credentials: credentials ? { username: credentials.username, password: credentials.password } : null,
     budgetMs: Math.floor(budgetMs * 0.2),
+    allowPrivateOriginForTesting: ctx.allowPrivateProductUrlForControlledRun === true,
     viewport: 'mobile',
     screenshotDir,
     traceDir: null,
@@ -345,7 +434,104 @@ async function browserTestingStage(job: AssessmentJob, ctx: StageContext): Promi
   });
   await persistRun(job.id, mobile, ctx);
 
+  /**
+   * Did the browser ever actually reach the product?
+   *
+   * If every navigation failed, nothing that follows is evidence about the
+   * submission — the assertions failed because there was no page, the console
+   * was quiet because nothing ran, and the accessibility scan found nothing to
+   * scan. Scoring that produces a low mark with high confidence, which reads as
+   * a judgement of the team rather than a failure of ours.
+   *
+   * Seen exactly once, during the controlled judging run: a navigation guard
+   * blocked every load and the pipeline still produced 37/100 at 0.83
+   * confidence with no flag raised. Preflight normally catches an unreachable
+   * product, but it checks with a plain fetch — a site can answer that and
+   * still refuse a headless browser, redirect elsewhere, or fail only under
+   * automation.
+   *
+   * So this is checked where the browser actually ran.
+   */
+  const outcome = classifyBrowserOutcome(desktop, mobile);
+
+  if (outcome.nextStage === 'manual_review') {
+    await ctx.store.assessment.raiseManualReview({
+      submissionId: job.submissionId,
+      reasonCode: outcome.reasonCode as string,
+      detail: outcome.detail as string,
+      raisedBy: 'system',
+      status: 'open',
+      resolvedBy: null,
+      resolvedAt: null,
+      resolutionNote: null,
+    });
+
+    ctx.log.warn('Browser never reached the product — routing to manual review', {
+      submissionId: job.submissionId,
+    });
+    return { stage: 'manual_review', error: outcome.reason as string };
+  }
+
   return { stage: 'evidence_review' };
+}
+
+/** The shape of a browser run, as far as this decision is concerned. */
+interface NavigableRun {
+  steps: { action: string; status: string; errorMessage: string | null }[];
+}
+
+export interface BrowserOutcome {
+  navigationSucceeded: boolean;
+  nextStage: 'evidence_review' | 'manual_review';
+  reasonCode: string | null;
+  reason: string | null;
+  detail: string | null;
+}
+
+/**
+ * Did the browser ever actually reach the product?
+ *
+ * Extracted from the stage so it can be driven directly. The decision it makes
+ * is the one that separates "this team shipped something that does not work"
+ * from "we never saw what this team shipped", and the two must never be
+ * confused — the first is a score, the second is a question for a human.
+ *
+ * One navigation that passed, in either viewport, is the whole test. A page
+ * that loads and then fails every assertion IS a finding about the product; a
+ * page that never loads is a finding about nothing.
+ */
+export function classifyBrowserOutcome(
+  desktop: NavigableRun,
+  mobile: NavigableRun,
+): BrowserOutcome {
+  const navigationSucceeded = [desktop, mobile].some((run) =>
+    run.steps.some((step) => step.action === 'navigate' && step.status === 'passed'),
+  );
+
+  if (navigationSucceeded) {
+    return {
+      navigationSucceeded: true,
+      nextStage: 'evidence_review',
+      reasonCode: null,
+      reason: null,
+      detail: null,
+    };
+  }
+
+  const reason =
+    desktop.steps.find((step) => step.action === 'navigate')?.errorMessage ??
+    'The browser could not open the product URL.';
+
+  return {
+    navigationSucceeded: false,
+    nextStage: 'manual_review',
+    reasonCode: 'browser_never_reached_product',
+    reason,
+    detail:
+      `The browser never loaded the product, so nothing observed is evidence about this ` +
+      `submission. Reported reason: ${reason}. This may be the host, the network or our own ` +
+      `configuration — it is not a finding about the team.`,
+  };
 }
 
 async function persistRun(jobId: string, run: BrowserRunResult, ctx: StageContext): Promise<void> {
@@ -393,6 +579,7 @@ async function scoringStage(job: AssessmentJob, ctx: StageContext): Promise<Stag
   if (!detail) return { stage: 'failed', error: 'Submission not found.' };
 
   const anonId = anonymiseSubmissionId(job.submissionId, detail.cohort.id);
+  guardDispatch(job, detail.cohort, ctx);
   const runs = await ctx.store.assessment.listBrowserRuns(job.id);
   const preflight = await ctx.store.assessment.listPreflight(job.id);
   const analysis = detail.artifactAnalysis;

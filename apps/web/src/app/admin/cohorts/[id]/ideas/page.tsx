@@ -1,9 +1,14 @@
 import { notFound } from 'next/navigation';
-import { getStore } from '@/lib/store';
+import { formatInTimezone } from '@ohj/shared';
+import { getStoreAsync } from '@/lib/store';
 import { requireAdmin } from '@/server/admin-auth';
-import { deactivateIdeaAction, saveIdeaAction } from '@/server/admin-actions';
+import {
+  approveIdeaDefinitionAction,
+  deactivateIdeaAction,
+  saveIdeaAction,
+} from '@/server/admin-actions';
 import { AdminForm } from '@/components/admin-form';
-import { Badge, Card, CardHeader, Checkbox, Field, Input, Textarea } from '@/components/ui';
+import { Alert, Badge, Card, CardHeader, Checkbox, Field, Input, Textarea } from '@/components/ui';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,11 +24,14 @@ export const dynamic = 'force-dynamic';
 export default async function IdeasPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const session = await requireAdmin();
-  const store = getStore();
+  const store = await getStoreAsync();
 
   const cohort = await store.cohorts.getCohort(id);
   if (!cohort) notFound();
   const ideas = await store.cohorts.listIdeas(id, { includeInactive: true });
+  const draftDefinitions = ideas.filter(
+    (idea) => idea.isActive && idea.definitionStatus === 'draft',
+  ).length;
 
   return (
     <div className="space-y-6">
@@ -35,13 +43,34 @@ export default async function IdeasPage({ params }: { params: Promise<{ id: stri
         </p>
       </div>
 
+      {draftDefinitions > 0 && (
+        <Alert tone="warning" testId="draft-definitions">
+          <p className="font-semibold">
+            {draftDefinitions} idea{draftDefinitions === 1 ? ' has' : 's have'} an unapproved
+            expanded definition.
+          </p>
+          <p className="mt-1">
+            Title and description come from the approved idea catalogue and are always used. The
+            fields below them — minimum core flow, expected entities, AI opportunity, allowed scope
+            — are Outskill&rsquo;s interpretation, written here. Test plans built from an unreviewed
+            interpretation would judge teams against something nobody agreed to, so read each one
+            and approve it before judging starts.
+          </p>
+        </Alert>
+      )}
+
       {ideas.map((idea) => (
         <Card key={idea.id}>
           <CardHeader
             title={
-              <span className="flex items-center gap-2">
+              <span className="flex flex-wrap items-center gap-2">
                 {idea.title}
                 {!idea.isActive && <Badge tone="neutral">inactive</Badge>}
+                <Badge tone={idea.definitionStatus === 'approved' ? 'success' : 'warning'}>
+                  {idea.definitionStatus === 'approved'
+                    ? 'definition approved'
+                    : 'definition in draft'}
+                </Badge>
               </span>
             }
             description={idea.description}
@@ -156,8 +185,30 @@ export default async function IdeasPage({ params }: { params: Promise<{ id: stri
             </div>
           </AdminForm>
 
-          {idea.isActive && (
-            <div className="mt-4 border-t border-line pt-4">
+          <div className="mt-4 flex flex-wrap gap-3 border-t border-line pt-4">
+            {idea.definitionStatus === 'draft' ? (
+              <AdminForm
+                action={approveIdeaDefinitionAction}
+                csrfToken={session.csrfToken}
+                submitLabel="Approve this definition"
+                confirm={`Approve the expanded definition for “${idea.title}”? Test plans will use it to judge every team that chose this idea.`}
+              >
+                <input type="hidden" name="ideaId" value={idea.id} />
+                <input type="hidden" name="cohortId" value={cohort.id} />
+              </AdminForm>
+            ) : (
+              <p className="self-center text-sm text-muted">
+                Approved
+                {idea.definitionApprovedAt &&
+                  ` on ${formatInTimezone(idea.definitionApprovedAt, cohort.timezone, {
+                    dateStyle: 'medium',
+                    timeStyle: 'short',
+                  })}`}
+                . Editing any expanded field returns it to draft.
+              </p>
+            )}
+
+            {idea.isActive && (
               <AdminForm
                 action={deactivateIdeaAction}
                 csrfToken={session.csrfToken}
@@ -168,8 +219,8 @@ export default async function IdeasPage({ params }: { params: Promise<{ id: stri
                 <input type="hidden" name="ideaId" value={idea.id} />
                 <input type="hidden" name="cohortId" value={cohort.id} />
               </AdminForm>
-            </div>
-          )}
+            )}
+          </div>
         </Card>
       ))}
 

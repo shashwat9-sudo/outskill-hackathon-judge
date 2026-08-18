@@ -15,7 +15,7 @@ import {
   validatePasswordStrength,
   verifyPassword,
 } from '@ohj/shared';
-import { getEnvConfig, getStore } from '@/lib/store';
+import { getEnvConfig, getStoreAsync } from '@/lib/store';
 
 /**
  * Shared-admin authentication.
@@ -54,7 +54,7 @@ async function requestFingerprint(): Promise<{ ipHash: string | null; userAgentH
  * the environment and the process refuses to invent one.
  */
 export async function ensureAdminAccount(): Promise<void> {
-  const store = getStore();
+  const store = await getStoreAsync();
   const env = getEnvConfig();
   const existing = await store.adminAuth.getAdminAccount();
   if (existing) return;
@@ -76,7 +76,7 @@ export interface LoginResult {
 }
 
 export async function loginAdmin(username: string, password: string): Promise<LoginResult> {
-  const store = getStore();
+  const store = await getStoreAsync();
   await ensureAdminAccount();
   const account = await store.adminAuth.getAdminAccount();
 
@@ -172,7 +172,7 @@ export async function getAdminSession(): Promise<AdminSessionContext | null> {
   const cookie = await readSessionCookie();
   if (!cookie) return null;
 
-  const store = getStore();
+  const store = await getStoreAsync();
   const session = await store.adminAuth.getSessionByHash(cookie.hash);
   if (!session) return null;
 
@@ -192,7 +192,7 @@ export async function requireAdmin(): Promise<AdminSessionContext> {
 export async function logoutAdmin(): Promise<void> {
   const session = await getAdminSession();
   if (session) {
-    await getStore().adminAuth.revokeSession(session.sessionId);
+    await (await getStoreAsync()).adminAuth.revokeSession(session.sessionId);
   }
   const cookieStore = await cookies();
   cookieStore.delete(SESSION_COOKIE);
@@ -229,7 +229,7 @@ export async function rotateAdminCredentials(input: {
   newUsername?: string;
   newPassword?: string;
 }): Promise<RotationResult> {
-  const store = getStore();
+  const store = await getStoreAsync();
   const account = await store.adminAuth.getAdminAccount();
   if (!account) return { ok: false, error: 'No admin account exists.' };
 
@@ -290,7 +290,7 @@ export async function auditAdminAction(input: {
   before?: Record<string, unknown> | null;
   after?: Record<string, unknown> | null;
 }): Promise<void> {
-  await getStore().audit.record({
+  await (await getStoreAsync()).audit.record({
     actorType: 'shared-admin',
     actorRef: 'shared-admin',
     action: input.action,

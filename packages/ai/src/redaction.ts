@@ -179,3 +179,68 @@ export function assertNoCredentials(payload: unknown, forbidden: readonly string
     }
   }
 }
+
+/**
+ * Last-resort check on an assembled AI payload.
+ *
+ * Deliberately does NOT take the real credentials. The previous version did,
+ * which meant a stored password had to be decrypted into memory in order to
+ * prove it was not being sent — creating the exposure it was checking for.
+ *
+ * Instead this looks for the shapes a credential takes when a participant types
+ * one into a field where it does not belong: a labelled password, a bearer
+ * token, a URL with inline credentials. Those are participant mistakes rather
+ * than payload-builder bugs, and they are the ones a structural allowlist
+ * cannot catch.
+ *
+ * The guarantee that OUR stored credentials never enter a payload is
+ * structural: no builder has a credential field. That is enforced by test, not
+ * by inspecting the assembled string.
+ */
+export function assertNoCredentialShapedContent(payload: unknown): void {
+  for (const value of collectStrings(payload)) {
+    // Redaction markers are removed first. Without this the check fires on its
+    // own success: `password: [REMOVED]` matches "a labelled password followed
+    // by four non-space characters", so a submission that merely mentioned a
+    // password — and was correctly scrubbed — would be refused. A guard that
+    // rejects the output of the thing it guards is worse than no guard,
+    // because the failure reads as a leak.
+    const text = value.replace(/\[[A-Z ]*REMOVED\]/g, '');
+
+    for (const shape of CREDENTIAL_SHAPES) {
+      if (shape.regex.test(text)) {
+        throw new Error(
+          `Refusing to send an AI payload that still contains ${shape.kind}. ` +
+            'Redaction should have removed it before the payload was built.',
+        );
+      }
+    }
+  }
+}
+
+/**
+ * Every string in a structure.
+ *
+ * The checks run per string rather than over `JSON.stringify(payload)`, because
+ * serialising turns a newline into the two characters `\` and `n` — both
+ * non-space. A "the value must be on the same line as the label" rule is
+ * meaningless against that, and the first real provider run refused a clean
+ * payload because of it.
+ */
+function collectStrings(value: unknown, out: string[] = []): string[] {
+  if (typeof value === 'string') out.push(value);
+  else if (Array.isArray(value)) for (const item of value) collectStrings(item, out);
+  else if (value && typeof value === 'object') {
+    for (const item of Object.values(value)) collectStrings(item, out);
+  }
+  return out;
+}
+
+const CREDENTIAL_SHAPES: { kind: string; regex: RegExp }[] = [
+  // `[ \t]*` rather than `\s*`: the value has to be on the same line as the
+  // label, or the match runs past a newline into the next sentence.
+  { kind: 'a labelled password', regex: /\b(?:password|passwd|pwd)[ \t]*[:=][ \t]*\S{4,}/i },
+  { kind: 'inline URL credentials', regex: /https?:\/\/[^/\s:@]+:[^/\s:@]+@/i },
+  { kind: 'a bearer token', regex: /\bBearer\s+[A-Za-z0-9._-]{20,}/ },
+  { kind: 'an API key', regex: /\b(?:sk|pk|api[_-]?key)[-_][A-Za-z0-9]{16,}/i },
+];

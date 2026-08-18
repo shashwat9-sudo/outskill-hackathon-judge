@@ -1,21 +1,49 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "lib": [
+      "ES2023",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "jsx": "preserve",
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "allowJs": true,
     "incremental": true,
-    "plugins": [{ "name": "next" }],
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
     "paths": {
-      "@/*": ["./src/*"],
-      "@ohj/shared": ["../../packages/shared/src/index.ts"],
-      "@ohj/shared/*": ["../../packages/shared/src/*"],
-      "@ohj/ai": ["../../packages/ai/src/index.ts"],
-      "@ohj/ai/*": ["../../packages/ai/src/*"]
+      "@/*": [
+        "./src/*"
+      ],
+      "@ohj/shared": [
+        "../../packages/shared/src/index.ts"
+      ],
+      "@ohj/shared/*": [
+        "../../packages/shared/src/*"
+      ],
+      "@ohj/ai": [
+        "../../packages/ai/src/index.ts"
+      ],
+      "@ohj/ai/*": [
+        "../../packages/ai/src/*"
+      ]
     }
   },
-  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
-  "exclude": ["node_modules"]
+  "include": [
+    "**/*.ts",
+    "**/*.tsx",
+    ".next-acceptance/types/**/*.ts",
+    ".next-uxreview/types/**/*.ts",
+    ".next/types/**/*.ts",
+    "next-env.d.ts",
+    ".next-vercelcheck/types/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules"
+  ]
 }

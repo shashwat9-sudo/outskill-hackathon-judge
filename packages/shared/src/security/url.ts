@@ -188,10 +188,25 @@ export interface ValidateUrlOptions {
   flagDocumentHosts?: boolean;
   /** Warn when the host is a video platform — wrong for a product URL. */
   flagVideoHosts?: boolean;
+  /**
+   * Accept an address on this machine or a private network.
+   *
+   * OFF by default, and nothing in the product sets it. It exists so the
+   * controlled judging run can point at a fixture server on 127.0.0.1 — the
+   * alternative being not to exercise preflight at all. Every other rule still
+   * applies, and `url-security.test.ts` asserts the default refuses loopback,
+   * link-local, private and metadata addresses.
+   */
+  allowPrivateAddress?: boolean;
 }
 
 export function validateUrl(input: string, options: ValidateUrlOptions = {}): UrlValidationResult {
-  const { requireHttps = true, flagDocumentHosts = false, flagVideoHosts = false } = options;
+  const {
+    requireHttps = true,
+    flagDocumentHosts = false,
+    flagVideoHosts = false,
+    allowPrivateAddress = false,
+  } = options;
   const warnings: UrlWarning[] = [];
 
   const trimmed = input?.trim() ?? '';
@@ -254,7 +269,7 @@ export function validateUrl(input: string, options: ValidateUrlOptions = {}): Ur
     };
   }
 
-  if (isIpLiteral(hostname)) {
+  if (isIpLiteral(hostname) && !allowPrivateAddress) {
     const classification = classifyAddress(hostname);
     if (!classification.safe) {
       return {
@@ -270,7 +285,9 @@ export function validateUrl(input: string, options: ValidateUrlOptions = {}): Ur
     });
   }
 
-  if (!ALLOWED_PORTS.has(url.port)) {
+  // A fixture server takes whatever port the OS gives it, so the controlled
+  // run is exempt from the port allowlist too. Nothing else is.
+  if (!allowPrivateAddress && !ALLOWED_PORTS.has(url.port)) {
     return {
       ok: false,
       code: 'port_not_allowed',

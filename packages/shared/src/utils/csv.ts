@@ -198,13 +198,92 @@ export function toCsv(headers: string[], rows: unknown[][]): string {
 
 export interface InviteExportRow {
   groupNumber: number;
-  leadEmail: string;
+  leadEmail: string | null;
   inviteUrl: string;
 }
 
 export function buildInviteCsv(rows: InviteExportRow[]): string {
   return toCsv(
     ['Group Number', 'Lead Email', 'Invite URL'],
-    rows.map((r) => [r.groupNumber, r.leadEmail, r.inviteUrl]),
+    rows.map((r) => [r.groupNumber, r.leadEmail ?? '', r.inviteUrl]),
+  );
+}
+
+export interface AccessCodeExportRow {
+  groupNumber: number;
+  /** Absent for teams imported from the allocation sheet, which names no lead. */
+  leadName: string | null;
+  leadEmail: string | null;
+  /** Where to send it. Distribution is manual, so the destination travels with the code. */
+  whatsappLink: string | null;
+  memberCount: number;
+  /** Formatted for reading aloud. */
+  code: string;
+}
+
+/**
+ * The one-time access-code sheet.
+ *
+ * Downloaded once at generation and distributed through Outskill's own channel
+ * (ADR-024). Only Argon2id hashes are stored, so this file is the only copy —
+ * losing it means regenerating, not recovering.
+ *
+ * The submission URL is included per row because every team needs it and it is
+ * the same for all of them: a team that has the code but not the address has
+ * nothing.
+ */
+/**
+ * The message a programme coordinator will actually send.
+ *
+ * Distribution is manual and per-team: someone opens each group's WhatsApp or
+ * Circle thread and pastes. Without this they assemble the same six lines
+ * sixty-five times from three columns, and the failure mode is not tedium, it
+ * is pasting group 41's code into group 14's thread.
+ *
+ * Built here, at the moment the plaintext exists, and never stored. The code
+ * lives in this string only as long as the file does.
+ */
+export function buildLearnerMessage(input: {
+  groupNumber: number;
+  code: string;
+  submitUrl: string;
+}): string {
+  return [
+    'Hackathon submission portal',
+    '',
+    `Group: ${input.groupNumber}`,
+    `Access code: ${input.code}`,
+    `Submit here: ${input.submitUrl}`,
+    '',
+    'This code is shared by your team. Please do not share it outside your group.',
+  ].join('\n');
+}
+
+export function buildAccessCodeCsv(rows: AccessCodeExportRow[], submitUrl: string): string {
+  return toCsv(
+    [
+      'Group Number',
+      'Members',
+      'WhatsApp Link',
+      'Team Lead',
+      'Lead Email',
+      'Access Code',
+      'Submission URL',
+      // Last, so every existing column keeps its position for anyone with a
+      // sheet or a script built against the old file.
+      'Learner Message',
+    ],
+    // Blank rather than a placeholder: an invented lead name in the file that
+    // gets distributed would be read as a real person.
+    rows.map((r) => [
+      r.groupNumber,
+      r.memberCount,
+      r.whatsappLink ?? '',
+      r.leadName ?? '',
+      r.leadEmail ?? '',
+      r.code,
+      submitUrl,
+      buildLearnerMessage({ groupNumber: r.groupNumber, code: r.code, submitUrl }),
+    ]),
   );
 }

@@ -10,6 +10,7 @@ import type { RubricCategoryKey, EvidenceSource } from '../rubric/index';
 import type { AssessmentStage, CohortStatus, SubmissionStatus } from '../domain/status';
 import type { DisqualificationReason } from '../domain/disqualification';
 import type { ConsistencyTrigger } from '../domain/ranking';
+import type { TeamActivityKind } from '../domain/concurrency';
 import type { TestStep } from '../testing/dsl';
 
 export type Actor = 'shared-admin' | 'participant' | 'system' | 'worker';
@@ -61,6 +62,15 @@ export interface Cohort {
   assessmentConfig: AssessmentConfig;
   status: CohortStatus;
   finalisedAt: Date | null;
+  /** When submissions actually stopped being accepted. */
+  closedAt: Date | null;
+  /** How they stopped: an admin pressed close, or the deadline passed. */
+  closureType: 'manual' | 'deadline' | null;
+  /**
+   * Set when reopening after the official deadline. Writes are accepted until
+   * this instant, so "reopened" never means "open but rejecting every save".
+   */
+  acceptingUntil: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -93,6 +103,15 @@ export interface CohortIdea {
   unsafeInterpretations: string;
   displayOrder: number;
   isActive: boolean;
+  /**
+   * Title and description come from the approved source catalogue. The expanded
+   * judging fields — minimum flow, entities, AI opportunity, allowed and
+   * prohibited scope — are our interpretation, and only influence real judging
+   * once approved (ADR-025).
+   */
+  definitionStatus: 'draft' | 'approved';
+  definitionApprovedAt: Date | null;
+  definitionApprovedBy: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -105,9 +124,19 @@ export interface Team {
   id: string;
   cohortId: string;
   groupNumber: number;
-  leadName: string;
-  leadEmail: string;
+  /**
+   * Nullable since migration 0005.
+   *
+   * The learner allocation sheet does not designate a lead — it lists learners
+   * against a group number and nothing more. Teams created from it genuinely
+   * have no lead, and a placeholder like "Group 12" would be a fabricated
+   * person's name appearing in exports and on screen.
+   */
+  leadName: string | null;
+  leadEmail: string | null;
   leadPhone: string;
+  /** Operational contact link from the allocation sheet. Never used for authentication. */
+  whatsappLink: string | null;
   status: 'active' | 'withdrawn';
   importedAt: Date;
   createdAt: Date;
@@ -118,9 +147,76 @@ export interface TeamMember {
   id: string;
   teamId: string;
   fullName: string;
+  /**
+   * Set when the member came from the allocation sheet; null when a team typed
+   * the name in themselves. It is the identity used to recognise the same
+   * learner on re-import, which is why it is unique per team.
+   */
+  email: string | null;
   contribution: string;
   displayOrder: number;
   isActive: boolean;
+}
+
+/**
+ * A team's access code.
+ *
+ * Versioned: regenerating increments `version`, which invalidates every
+ * participant session minted under the old code without having to find them.
+ * Only the Argon2id hash is stored — plaintext is shown once, at generation.
+ */
+export interface TeamAccessCode {
+  id: string;
+  teamId: string;
+  cohortId: string;
+  groupNumber: number;
+  codeHash: string;
+  version: number;
+  createdAt: Date;
+  revokedAt: Date | null;
+  lastVerifiedAt: Date | null;
+  verifyCount: number;
+}
+
+/** A verified team session. The access code itself never travels again. */
+export interface ParticipantSession {
+  id: string;
+  teamId: string;
+  cohortId: string;
+  sessionTokenHash: string;
+  /** An activity label, never verified identity. */
+  editorName: string;
+  editorRole: string | null;
+  accessCodeVersion: number;
+  createdAt: Date;
+  lastActiveAt: Date;
+  expiresAt: Date;
+  revokedAt: Date | null;
+  ipHash: string | null;
+}
+
+/** Learner-safe activity, distinct from the internal audit log. */
+export interface TeamActivity {
+  id: string;
+  submissionId: string;
+  teamId: string;
+  /** Closed set, matching the CHECK constraint on the table. */
+  kind: TeamActivityKind;
+  editorName: string;
+  section: string | null;
+  createdAt: Date;
+}
+
+/** Rate-limit state for /submit verification, keyed by hashed IP + group. */
+export interface VerificationAttempt {
+  id: string;
+  cohortId: string;
+  groupNumber: number;
+  ipHash: string;
+  attempts: number;
+  windowStartedAt: Date;
+  lockedUntil: Date | null;
+  updatedAt: Date;
 }
 
 export interface TeamInvite {
@@ -176,8 +272,14 @@ export interface Submission {
 
   /** Raw autosaved draft, kept separate from the promoted columns. */
   draftPayload: Record<string, unknown>;
+  /** Optimistic-concurrency version. Every write carries the version it read. */
+  version: number;
   draftUpdatedAt: Date | null;
+  /** Activity label of whoever last saved. Not verified identity. */
+  lastEditedBy: string | null;
   submittedAt: Date | null;
+  /** Activity label of whoever pressed Final Submit. */
+  submittedByName: string | null;
   receiptId: string | null;
   lockedAt: Date | null;
   reopenedAt: Date | null;
@@ -566,6 +668,14 @@ export interface ParticipantView {
   /** True when credentials are stored — never the values themselves. */
   hasStoredCredentials: boolean;
   canEdit: boolean;
+  canSubmit: boolean;
+  /** Why editing is or is not permitted, safe to show a participant. */
+  windowMessage: string;
+  effectiveDeadline: Date;
+  /** Activity label of the person editing in this session. */
+  editorName: string;
+  /** Learner-safe recent activity by the team. */
+  recentActivity: TeamActivity[];
 }
 
 /** The admin view of one submission. */

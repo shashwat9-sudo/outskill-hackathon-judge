@@ -2,10 +2,10 @@
 
 ## Current position
 
-**All seven phases complete, plus a UX, information-architecture and branding pass.**
+**All seven phases complete, plus a UX, information-architecture and branding pass, plus the production learner entry.**
 The platform runs end to end locally in demo mode. Nothing has been deployed.
 
-**Gate:** lint ✅ · typecheck ✅ · 244 unit/integration tests ✅ · 67 E2E tests ✅ · build ✅
+**Gate:** lint ✅ · typecheck ✅ · 406 unit/integration tests ✅ · 104 Playwright tests ✅ · build ✅
 
 | Phase | State |
 | --- | --- |
@@ -16,6 +16,25 @@ The platform runs end to end locally in demo mode. Nothing has been deployed.
 | 4 — Playwright worker | ✅ complete |
 | 5 — Scoring and ranking | ✅ complete |
 | 6 — Hardening | ✅ complete |
+| Production learner entry | ✅ complete in code; unwired against a real database, like everything else |
+
+---
+
+## Production-readiness baseline
+
+Recorded before the production-entry phase began, on a clean tree:
+
+| Gate | Result |
+| --- | --- |
+| `npm run lint` | ✅ clean |
+| `npm run typecheck` | ✅ clean |
+| `npm run test` | ✅ 244 passed (8 files) |
+| `npm run test:e2e` | ✅ 67 passed |
+| `npm run build` | ✅ compiled |
+
+Starting state: 3 migrations (`0001_schema`, `0002_rls`, `0003_storage`), 29
+env keys, invite-token participant access, 27 admin actions. No broken baseline
+to fix.
 
 ---
 
@@ -108,13 +127,90 @@ by `e2e/screenshots.spec.ts`.
 
 ---
 
+## Production learner entry
+
+The change that turned a demo-shaped intake into one a real cohort could use.
+No change to assessment logic, scoring, ranking, final-four selection or the
+existing security controls.
+
+### What landed
+
+| Area | What it is now |
+| --- | --- |
+| Entry | One common URL, `/submit`, with no team identifier in it. Outskill pastes it into Circle by hand — there is no Circle integration, iframe or API, and none is planned (ADR-026). |
+| Credential | Group number plus a shared team access code: 12 characters, 30-character alphabet without `O`/`0`/`I`/`1`/`L`/`U`, formatted `ABCD-EFGH-JKMN`, Argon2id-hashed, versioned, shown once (ADR-027). |
+| Anti-enumeration | One identical failure message for every cause, so the form cannot be used to discover which group numbers exist. |
+| Rate limiting | 8 attempts per 15 minutes per hashed IP **and** group, 15-minute lockout, cleared by an admin in one click. |
+| Entry flow | Two steps — verify, then "who is editing" — bridged by an HttpOnly cookie holding a signed 10-minute HMAC assertion, never a bare team id (ADR-028). |
+| Session | Opaque 32-byte token, only a hash of it stored, cookie `ohj_team_session` (HttpOnly, `SameSite=Lax`, `path=/submit`), bound to the access-code version so regeneration revokes everything at once. |
+| Shared editing | Any member with the code edits the same entry. `submissions.version` refuses a stale write instead of overwriting a teammate (ADR-030), and a learner-safe activity feed of six event kinds shows who did what. |
+| Submission window | Computed from the server clock on every write (ADR-031). Automatic deadline, manual close behind a typed `CLOSE SUBMISSIONS`, pause/resume, reopen with a reason, and reopen-with-extension — which is *required* after the deadline. |
+| Receipt | On-screen plus a PDF at `/submit/receipt`: session-only, generated in-process, and asserted to carry no code, credential or internal id before the bytes exist. Admins can look a submission up by receipt ID. |
+| Guide | Two-day submission guide at `/submit/guide` and `/api/guide`, one source for both, readable without signing in. The admin playbook stays admin-only. |
+| Idea definitions | `draft` / `approved`, with the expanded fields influencing real judging only once approved, and any edit returning them to draft (ADR-025). |
+| Operations | `/api/health` (200/503, reveals nothing), worker `/healthz` and `/readyz` (liveness vs readiness — a worker inside a browser run is **busy**, not stalled), and `apps/worker/Dockerfile` on the Playwright base image, non-root. |
+| Production root | A minimal landing page with a *Start your submission* call to action and the guide link. The exploratory demo home appears only under `DEMO_MODE=1`. |
+| Schema | `0004_production_entry.sql`: four new tables, submission versioning, cohort closure and reopening columns, idea-definition approval. Forward-only; nothing dropped or rewritten. |
+
+### RLS posture of the new tables
+
+Admin has full access to all four. Participants get **SELECT on `team_activity`
+for their own team only**, and **no policy at all** on `team_access_codes`,
+`participant_sessions` or `verification_attempts` — a participant role able to
+read access codes could enumerate the cohort, which is exactly what the generic
+error message exists to prevent. The migration says so at the point where
+someone would otherwise add one. The worker gets nothing on any of the four.
+
+### Tests added
+
+| Area | Where |
+| --- | --- |
+| Code generation, alphabet exclusions, normalisation, verification, rate-limit arithmetic | `packages/shared/src/security/access-code.test.ts` |
+| Session tokens, keyed hashing, editor-name validation, session lifetime and validity, cookie scoping | `packages/shared/src/security/participant-session.test.ts` |
+| Window states, deadline enforcement, extension handling, reopen validation | `packages/shared/src/domain/submission-window.test.ts` |
+| Stale-write refusal, activity vocabulary, relative time | `packages/shared/src/domain/concurrency.test.ts` |
+| Receipt PDF structure and the safety assertion | `packages/shared/src/domain/receipt-pdf.test.ts` |
+| Worker liveness vs readiness, staleness limits, draining | `apps/worker/src/health.test.ts` |
+| Verification, generic failure message, rate limiting and lockout clearing, code issue and revocation, session revocation on regeneration, shared editing, window enforcement | `packages/shared/src/data/memory/store.test.ts` |
+| Common entry, identical failure messages, code absent from URL/history/storage, editor name, session forgery, isolation | `e2e/submit-entry.spec.ts` |
+| Guide without sign-in, access-code screens, closing and reopening, receipt lookup, idea approval, health | `e2e/operations.spec.ts` |
+
+### Verified
+
+| Gate | Result |
+| --- | --- |
+| `npm run lint` | ✅ clean |
+| `npm run typecheck` | ✅ clean |
+| `npm run test` | ✅ 406 passed (15 files) |
+| `npm run test:e2e` | ✅ 104 passed (7 files) |
+| `npm run build` | ✅ compiled |
+
+### Explicitly NOT done
+
+Stated plainly, because a green gate above says nothing about any of this:
+
+1. **The postgres driver is still unwired.** `getStore()` throws when
+   `DEMO_MODE=0`, and the worker refuses to start. Everything above has been
+   exercised against the memory driver only. Failing loudly is deliberate —
+   silently serving fixtures in production would be far worse — but it means
+   no line of this has run against real Postgres, RLS or Supabase Storage.
+2. **No Supabase project exists.** `0004_production_entry.sql` has never been
+   applied anywhere. The RLS posture described above is what the migration
+   says, not something a database has confirmed.
+3. **No AI provider account or key.** Everything AI-shaped runs on the
+   deterministic demo provider.
+4. **Nothing is deployed.** No web host, no worker container, no egress policy.
+   The Dockerfile is written and its version-pinning rule is documented; no
+   container has been deployed anywhere.
+---
+
 ## Acceptance criteria
 
 | # | Criterion | State | Demonstrated by |
 | --- | --- | --- | --- |
 | 1 | Demo cohort works end to end | ✅ | `DEMO_MODE=1 npm run dev` — six teams, full pipeline output, ranking |
-| 2 | Participant submits via secure invite | ✅ | `e2e/participant.spec.ts` — invite access, six steps, lock, receipt |
-| 3 | Participant sees no judging information | ✅ | 6 negative E2E tests + `store.test.ts` participant-isolation block |
+| 2 | Participant submits via secure access | ✅ | `e2e/submit-entry.spec.ts` — common URL, group number and access code, editor name, session; `e2e/participant.spec.ts` — six steps, lock, receipt |
+| 3 | Participant sees no judging information | ✅ | Negative E2E tests on the portal, the receipt and the new entry flow, plus the `store.test.ts` participant-isolation block |
 | 4 | Admin manages cohort and ideas | ✅ | `e2e/admin.spec.ts` — cohorts, all eight ideas editable |
 | 5 | Shared admin password can be rotated | ✅ | `rotateAdminCredentials`; E2E asserts rotation without the current password is refused |
 | 6 | PDF upload is private | ✅ | `submission-decks` bucket private; no participant SELECT policy on storage objects |
@@ -133,9 +229,10 @@ by `e2e/screenshots.spec.ts`.
 | 19 | No PII or private source file is committed | ✅ | `git ls-files \| grep reference-materials` → 0 |
 | 20 | Lint, typecheck, tests and build pass | ✅ | `npm run verify` + `npm run test:e2e` |
 
-All twenty still hold after the redesign. Participant isolation, the security
-controls, the scoring and ranking logic, the schema and the assessment pipeline
-were not modified.
+All twenty still hold after the redesign and after the production learner entry.
+The scoring and ranking logic, the assessment pipeline and the existing security
+controls were not modified; the entry work added tables and routes rather than
+changing any of them.
 
 ---
 
@@ -143,7 +240,14 @@ were not modified.
 
 | Check | Result |
 | --- | --- |
-| Participant routes cannot reach any assessment table | ✅ `ParticipantStore` exposes 8 methods, none touching assessment data; 6 negative E2E tests |
+| Participant routes cannot reach any assessment table | ✅ `ParticipantStore` exposes 14 methods, every one resolving the session server-side and none touching assessment data; negative E2E tests on the portal, the receipt and the entry flow |
+| Every verification failure returns one identical message | ✅ Unit tests on the message; E2E asserts a wrong code and an unknown group are indistinguishable |
+| No participant policy on the three sensitive entry tables | ✅ `0004_production_entry.sql` grants none, and says why at the point someone would add one |
+| The access code never reaches a URL, history or client storage | ✅ E2E inspects the URL, the history entries and both web storages after signing in |
+| An invented session cookie does not open the portal | ✅ `e2e/submit-entry.spec.ts` |
+| Regenerating a code ends every session under the old one | ✅ Version-binding unit tests plus a store integration test |
+| A stale write is refused rather than applied | ✅ `concurrency.test.ts` and the shared-editing block in `store.test.ts` |
+| The receipt PDF carries no code, credential or internal id | ✅ `assertReceiptSafe` throws before bytes exist; asserted for all three |
 | SSRF blocklist verified against the full address table | ✅ 23 address-classification tests including IPv4-mapped IPv6 and boundary cases |
 | Prompt-injection fixture does not alter a worker run | ✅ Worker test: the run follows the plan, not the page |
 | Credentials absent from every AI payload | ✅ `packages/ai` never references a credential field; `assertNoCredentials` throws if one appears |
@@ -161,13 +265,16 @@ were not modified.
 | Area | Detail |
 | --- | --- |
 | Monorepo | npm workspaces; `apps/web`, `apps/worker`, `packages/shared`, `packages/ai` |
-| Participant portal | `/submit/[token]`, six autosaving steps, review, typed FINAL SUBMIT, receipt, lock |
-| Admin portal | 13 routes, 11-tab submission detail, override, disqualification, ranking, final four |
-| Database | 34 tables, 3 migrations, RLS for three roles, six private buckets |
+| Participant entry | One common `/submit`, group number plus shared access code, two-step entry, opaque session, shared editing, activity feed |
+| Participant portal | `/submit/portal`, six autosaving steps, review, typed FINAL SUBMIT, receipt on screen and as a PDF, lock |
+| Participant reading | `/submit/guide` and `/api/guide`, readable without signing in, one source for page and PDF |
+| Admin portal | 18 page routes, 36 admin actions, 11-tab submission detail, access codes, closure controls, receipt lookup, override, disqualification, ranking, final four |
+| Database | 38 tables, 4 migrations, RLS for three roles, six private buckets |
 | AI | Provider-independent adapter, deterministic demo provider, versioned prompts, two-layer redaction, injection containment |
-| Worker | Preflight (13 checks), DSL executor, SSRF guard, deep browser testing, evidence capture, fixture app |
-| Tests | 229 unit/integration, 30 worker (browser), 26 E2E |
-| Docs | PRD, architecture, threat model, ERD, build plan, decisions, reference analysis, admin playbook, deployment runbook |
+| Worker | Preflight (13 checks), DSL executor, SSRF guard, deep browser testing, evidence capture, fixture app, `/healthz` and `/readyz`, Playwright-based container image |
+| Operations | `/api/health`, 30 validated environment keys, config that refuses to boot when it is wrong |
+| Tests | 406 unit/integration (including 30 worker browser tests), 104 Playwright |
+| Docs | PRD, architecture, threat model, ERD, build plan, decisions, reference analysis, admin playbook, deployment runbook, learner journey, admin operations, branding |
 | Deck | 11-slide internal briefing, generated programmatically in black/white/green |
 
 ---
@@ -180,6 +287,9 @@ were not modified.
 4. **No Outskill green exists in any supplied asset** — the deck template uses the stock Google Slides theme. The brand green is a documented, configurable placeholder (ADR-014).
 5. **The E2E suite caught a real defect**: a closure was being passed from a Server Component to a Client Component for CSV export, which crashed two admin pages in a production build but not in tests that never rendered them.
 6. **The SSRF guard blocked our own fixture app**, which is the guard working correctly. Rather than weakening it, the executor gained an explicit test-only opt-in that still enforces scheme and same-origin, and is refused outright when `NODE_ENV=production`.
+7. **The access-code constants had to be split from the access-code code.** The entry form is a client component and needs the expected length and the failure message; `access-code.ts` imports `node:crypto` and Argon2 and must never enter a browser bundle. The constants file has no imports at all, which is what makes it safe to re-export through `@ohj/shared/client`.
+8. **Reopening a cohort is the state most likely to be got wrong**, not closing it. Reopening after the deadline without an extension produces a cohort that reads as open and rejects every save — so the shared validator refuses it, and the form asks for the acceptance time up front rather than letting an operator meet that refusal by surprise.
+9. **The Playwright base-image tag must track the resolved version, not the range.** The image bundles specific browser builds, so a client/browser mismatch fails at runtime rather than at build time. The Dockerfile says so, next to the tag.
 
 ---
 
@@ -191,7 +301,9 @@ None blocking. Full detail in `reference-analysis.md` §7 and `DEPLOYMENT_RUNBOO
 2. **Playbook revision** — it still describes a three-day hackathon and the old submission portal, and is internally inconsistent on demo length (3–5 min vs 2–3 min). Learners will read it.
 3. **Curriculum review of the extended idea definitions** — ours are an interpretation of two-sentence source descriptions.
 4. **Deck template size** — 8.3 MB, served through a signed URL; a compressed variant would help on slow connections.
-5. **Postgres driver wiring** — the schema is complete; the worker deliberately refuses to run with `DEMO_MODE=0` rather than silently assessing fixtures.
+5. **Postgres driver wiring** — the schema is complete through `0004_production_entry.sql`; the web app throws and the worker refuses to start with `DEMO_MODE=0` rather than silently serving or assessing fixtures.
+6. **Approve the expanded idea definitions** for the cohort before judging starts. Until then they sit in draft and do not influence real judging (ADR-025).
+7. **Agree who pastes the submission URL into Circle, and when.** It is a manual step by design (ADR-026), which means it is also a step someone has to own.
 
 ---
 

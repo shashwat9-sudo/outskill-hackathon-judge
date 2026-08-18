@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { dismissTour, openScenario } from './learner-support';
 import { mkdir } from 'node:fs/promises';
 
 /**
@@ -23,6 +24,12 @@ test.beforeAll(async () => {
   await mkdir(OUT, { recursive: true });
 });
 
+/** On a phone the six steps are folded behind a toggle; on a laptop they are not. */
+async function openSteps(page: Page) {
+  const toggle = page.getByTestId('toggle-steps');
+  if (await toggle.isVisible().catch(() => false)) await toggle.click();
+}
+
 async function shoot(page: Page, name: string) {
   await page.waitForTimeout(300); // let transitions settle
   await page.screenshot({ path: `${OUT}/${name}.png`, fullPage: true });
@@ -34,15 +41,6 @@ async function signIn(page: Page) {
   await page.getByLabel('Password').fill(PASSWORD);
   await page.getByRole('button', { name: 'Sign in' }).click();
   await expect(page).toHaveURL(/\/admin$/);
-}
-
-async function portalHref(page: Page, scenario: string): Promise<string> {
-  await page.goto('/');
-  const href = await page
-    .locator(`[data-testid="demo-scenario-card"][data-scenario="${scenario}"]`)
-    .getByRole('link', { name: 'Open learner portal' })
-    .getAttribute('href');
-  return href as string;
 }
 
 for (const [device, viewport] of [
@@ -59,23 +57,45 @@ for (const [device, viewport] of [
       await shoot(page, `${device}-01-demo-home`);
 
       // --- Learner: welcome / step 1 ---
-      const draft = await portalHref(page, 'incomplete');
-      await page.goto(draft);
-      await expect(page.getByTestId('submission-stepper').first()).toBeVisible();
+      // The step list is folded away on a phone, so the progress line is what
+      // is on screen at both sizes.
+      await openScenario(page, 'incomplete');
+      await expect(page.getByTestId('percent-complete')).toBeVisible();
       await shoot(page, `${device}-02-learner-welcome`);
 
+      // --- Learner: the help menu and the first-run tour ---
+      await page.getByTestId('need-help').click();
+      await expect(page.getByTestId('help-menu')).toBeVisible();
+      await shoot(page, `${device}-02b-learner-help-menu`);
+      await page.getByTestId('help-replay-tour').click();
+      await expect(page.getByTestId('submission-walkthrough')).toBeVisible();
+      await shoot(page, `${device}-02c-learner-tour`);
+      await dismissTour(page);
+
       // --- Learner: a form step with cards (product idea) ---
+      await openSteps(page);
       await page.getByTestId('submission-stepper').first().getByRole('button').nth(1).click();
       await expect(page.getByTestId('idea-cards')).toBeVisible();
       await shoot(page, `${device}-03-learner-step`);
 
+      // --- Learner: a question explaining itself ---
+      await page.getByTestId('see-example-exactProblem').click();
+      await expect(page.getByTestId('example-exactProblem')).toBeVisible();
+      await shoot(page, `${device}-03b-learner-field-example`);
+
       // --- Learner: review ---
+      await openSteps(page);
       await page.getByTestId('submission-stepper').first().getByRole('button').nth(5).click();
-      await expect(page.getByText('This locks your submission')).toBeVisible();
+      await expect(page.getByText('Before you submit')).toBeVisible();
       await shoot(page, `${device}-04-learner-review`);
 
+      // --- Learner: the completed example ---
+      await page.goto('/submit/example');
+      await expect(page.getByTestId('example-banner')).toBeVisible();
+      await shoot(page, `${device}-04b-learner-completed-example`);
+
       // --- Learner: receipt ---
-      await page.goto(await portalHref(page, 'complete'));
+      await openScenario(page, 'complete');
       await expect(page.getByTestId('submission-receipt')).toBeVisible();
       await shoot(page, `${device}-05-learner-receipt`);
 

@@ -1,9 +1,9 @@
 /**
  * The Outskill component set.
  *
- * Dark, high-contrast and restrained. The lime accent is reserved for primary
- * actions, active navigation, progress and success — never used as body text
- * and never as a decorative glow.
+ * Dark, high-contrast and restrained. The orange accent is reserved for primary
+ * actions, active navigation and progress — never used as body text, where
+ * `text-brand-text` carries the accessible variant instead.
  *
  * Accessibility is owned here rather than inherited: every input is
  * label-associated, errors are wired with `aria-describedby` and `aria-invalid`,
@@ -40,7 +40,7 @@ export function Wordmark({
         OUTSKILL
       </span>
       {subtitle && (
-        <span className="mt-0.5 text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-brand">
+        <span className="mt-0.5 text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-brand-text">
           {subtitle}
         </span>
       )}
@@ -56,14 +56,15 @@ type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
 type ButtonSize = 'sm' | 'md' | 'lg';
 
 const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
-  // Lime on black — the only element that gets this treatment.
+  // Orange fill with warm near-black ink, never white. The only element
+  // that gets this treatment.
   primary:
-    'bg-brand text-black font-bold hover:bg-brand-hover disabled:bg-surface-soft disabled:text-muted',
+    'bg-brand text-on-accent font-bold hover:bg-brand-hover disabled:bg-surface-soft disabled:text-muted',
   secondary:
     'bg-surface-alt text-ink border border-line hover:bg-surface-soft hover:border-brand-edge disabled:text-muted',
   ghost: 'bg-transparent text-muted hover:bg-surface-alt hover:text-ink disabled:text-muted',
   danger:
-    'bg-danger-tint text-danger border border-danger/50 font-semibold hover:bg-danger hover:text-black disabled:text-muted',
+    'bg-danger-tint text-danger border border-danger/50 font-semibold hover:bg-danger hover:text-on-accent disabled:text-muted',
 };
 
 const BUTTON_SIZES: Record<ButtonSize, string> = {
@@ -143,7 +144,7 @@ export function Field({ id, label, hint, error, required, children }: FieldProps
       <label htmlFor={id} className="block text-sm font-semibold text-ink">
         {label}
         {required && (
-          <span className="ml-1 text-brand" aria-hidden="true">
+          <span className="ml-1 text-brand-text" aria-hidden="true">
             *
           </span>
         )}
@@ -234,7 +235,7 @@ export function Checkbox({ label, description, id, className, ...props }: Checkb
         id={id}
         aria-describedby={descriptionId}
         {...props}
-        className="mt-1 h-5 w-5 shrink-0 rounded border-2 border-line bg-canvas accent-[var(--brand-accent)]"
+        className="mt-1 h-5 w-5 shrink-0 rounded border-2 border-line bg-canvas accent-[var(--accent)]"
       />
       <div className="space-y-0.5">
         <label htmlFor={id} className="block text-sm text-ink">
@@ -259,12 +260,22 @@ export function Card({
   className,
   as: Component = 'div',
   tone = 'default',
+  padding = 'default',
   testId,
 }: {
   children: React.ReactNode;
   className?: string;
   as?: React.ElementType;
   tone?: 'default' | 'raised' | 'accent';
+  /**
+   * `compact` for cards a learner scrolls past rather than reads.
+   *
+   * A prop rather than a `p-4` in `className`: two padding utilities on one
+   * element are decided by stylesheet order, not by which was written last, so
+   * an override passed in is a coin toss. Tailwind v4 also drops the `!p-4`
+   * prefix form — those were silently doing nothing.
+   */
+  padding?: 'default' | 'compact';
   /** Explicit test hook — arbitrary props are not spread onto the element. */
   testId?: string;
 }) {
@@ -274,10 +285,15 @@ export function Card({
     accent: 'bg-surface-alt border-brand-edge',
   } as const;
 
+  const paddings = {
+    default: 'p-5 sm:p-6',
+    compact: 'p-4 sm:p-5',
+  } as const;
+
   return (
     <Component
       data-testid={testId}
-      className={cn('rounded-[14px] border p-5 sm:p-6', tones[tone], className)}
+      className={cn('rounded-[14px] border', paddings[padding], tones[tone], className)}
     >
       {children}
     </Component>
@@ -323,7 +339,7 @@ export function PageHeading({
     <div className="mb-8 flex flex-wrap items-start justify-between gap-4">
       <div>
         {eyebrow && (
-          <p className="mb-1.5 text-xs font-bold uppercase tracking-[0.16em] text-brand">{eyebrow}</p>
+          <p className="mb-1.5 text-xs font-bold uppercase tracking-[0.16em] text-brand-text">{eyebrow}</p>
         )}
         <h1 className="text-2xl font-bold text-ink sm:text-3xl">{title}</h1>
         {description && <p className="mt-2 max-w-2xl text-sm text-muted">{description}</p>}
@@ -341,7 +357,7 @@ const BADGE_TONES: Record<BadgeTone, string> = {
   warning: 'bg-warning-tint text-warning border-warning/40',
   danger: 'bg-danger-tint text-danger border-danger/40',
   info: 'bg-info-tint text-info border-info/40',
-  accent: 'bg-brand-tint text-brand border-brand-edge',
+  accent: 'bg-brand-tint text-brand-text border-brand-edge',
 };
 
 export function Badge({
@@ -406,7 +422,7 @@ const ALERT_TONES: Record<AlertTone, string> = {
   warning: 'border-warning/40 bg-warning-tint text-warning',
   danger: 'border-danger/40 bg-danger-tint text-danger',
   success: 'border-success/40 bg-success-tint text-success',
-  accent: 'border-brand-edge bg-brand-tint text-brand',
+  accent: 'border-brand-edge bg-brand-tint text-brand-text',
 };
 
 export function Alert({
@@ -414,16 +430,19 @@ export function Alert({
   title,
   children,
   className,
+  testId,
 }: {
   tone?: AlertTone;
   title?: string;
   children: React.ReactNode;
   className?: string;
+  testId?: string;
 }) {
   return (
     <div
       // Errors interrupt; everything else waits for a pause in speech.
       role={tone === 'danger' ? 'alert' : 'status'}
+      data-testid={testId}
       className={cn('rounded-[10px] border-l-2 border border-l-4 p-4', ALERT_TONES[tone], className)}
     >
       {title && <p className="font-bold">{title}</p>}
@@ -542,7 +561,7 @@ export function Stat({
       <p
         className={cn(
           'mt-2 text-3xl font-bold tabular-nums',
-          tone === 'accent' ? 'text-brand' : 'text-ink',
+          tone === 'accent' ? 'text-brand-text' : 'text-ink',
         )}
       >
         {value}
@@ -556,10 +575,36 @@ export function Stat({
 // Stepper
 // --------------------------------------------------------------------------
 
+/**
+ * Where a step stands.
+ *
+ * Four states rather than a boolean, because "not complete" covers two very
+ * different situations: a step nobody has opened yet, and a step somebody
+ * filled in most of and left. The first is normal progress; the second is
+ * something to go back to, and a learner deciding what to do next needs to
+ * tell them apart at a glance.
+ */
+export type StepState = 'complete' | 'attention' | 'untouched';
+
+/** The mark against each step. Paired with words, never the only signal. */
+const STEP_MARK: Record<StepState, string> = {
+  complete: '✓',
+  attention: '⚠',
+  untouched: '○',
+};
+
+const STEP_WORDS: Record<StepState, string> = {
+  complete: 'complete',
+  attention: 'needs attention',
+  untouched: 'not started',
+};
+
 export interface StepperStep {
   key: string;
   label: string;
-  complete: boolean;
+  state: StepState;
+  /** Shown next to the label — usually the count of things left. */
+  note?: string;
 }
 
 /**
@@ -587,10 +632,18 @@ export function Stepper({
           'flex gap-2',
           orientation === 'vertical' && 'flex-col',
           orientation === 'horizontal' && 'flex-wrap',
+          /*
+           * Wrapped on a phone, stacked on a laptop.
+           *
+           * A single scrolling row was tried and reverted: an overflowing flex
+           * scroller inside the grid pushed `documentElement.scrollWidth` to
+           * 898px on a 360px screen, so the whole page moved sideways. Wrapping
+           * also shows all six states at once, which is the point of them.
+           */
           orientation === 'responsive' && 'flex-wrap lg:flex-col',
         )}
       >
-        {steps.map((step, index) => {
+        {steps.map((step) => {
           const isCurrent = step.key === currentKey;
           return (
             <li key={step.key}>
@@ -598,9 +651,14 @@ export function Stepper({
                 type="button"
                 onClick={() => onSelect(step.key)}
                 aria-current={isCurrent ? 'step' : undefined}
+                data-testid={`step-${step.key}`}
+                data-state={step.state}
                 className={cn(
                   'flex items-center gap-2.5 rounded-[10px] border px-3 py-2.5 text-left text-sm font-medium transition-colors',
-                  orientation !== 'horizontal' && 'w-full',
+                  // Comfortably past the 44px touch target on a phone.
+                  'min-h-11',
+                  orientation === 'vertical' && 'w-full',
+                  orientation === 'responsive' && 'lg:w-full',
                   isCurrent
                     ? 'border-brand-edge bg-brand-tint text-ink'
                     : 'border-transparent text-muted hover:bg-surface-alt hover:text-ink',
@@ -610,21 +668,36 @@ export function Stepper({
                   aria-hidden="true"
                   className={cn(
                     'flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold',
-                    step.complete
-                      ? 'bg-brand text-black'
-                      : isCurrent
-                        ? 'border border-brand text-brand'
-                        : 'border border-line text-muted',
+                    isCurrent
+                      ? 'bg-brand text-on-accent'
+                      : step.state === 'complete'
+                        ? 'border border-success text-success'
+                        : step.state === 'attention'
+                          ? 'border border-warning text-warning'
+                          : 'border border-line text-muted',
                   )}
                 >
-                  {step.complete ? '✓' : index + 1}
+                  {isCurrent ? '●' : STEP_MARK[step.state]}
                 </span>
-                <span className={cn(orientation === 'horizontal' && 'hidden sm:inline')}>
-                  {step.label}
-                </span>
+                <span className="min-w-0 lg:flex-1 lg:truncate">{step.label}</span>
+                {/* The count is desktop-only. On a phone the six chips are
+                    already wrapping, and a "2 left" on each pushes them to four
+                    rows — the mark carries the state, and the step's own
+                    "What's missing?" carries the number. */}
+                {step.note && (
+                  <span
+                    aria-hidden="true"
+                    className={cn(
+                      'hidden shrink-0 text-xs font-semibold lg:inline',
+                      step.state === 'attention' ? 'text-warning' : 'text-muted',
+                    )}
+                  >
+                    {step.note}
+                  </span>
+                )}
                 <span className="sr-only">
-                  {step.label}
-                  {step.complete ? ' — complete' : ' — incomplete'}
+                  {` — ${STEP_WORDS[step.state]}${isCurrent ? ', you are here' : ''}`}
+                  {step.note ? `, ${step.note}` : ''}
                 </span>
               </button>
             </li>

@@ -4,7 +4,7 @@ import './globals.css';
 export const metadata: Metadata = {
   title: 'Outskill Hackathon Judge',
   description: 'Internal hackathon submission and assessment platform.',
-  // Judging material must never be indexed, and neither should invite links.
+  // Judging material must never be indexed, and neither should a submission page.
   robots: { index: false, follow: false, nocache: true },
 };
 

@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { getStore } from '@/lib/store';
+import { getStoreAsync } from '@/lib/store';
 import { requireAdmin } from '@/server/admin-auth';
 import { Badge, Card, CardHeader, Table, Td, Th } from '@/components/ui';
 
@@ -16,7 +16,7 @@ export default async function SubmissionsPage({
   const { id } = await params;
   const { q, stage } = await searchParams;
   await requireAdmin();
-  const store = getStore();
+  const store = await getStoreAsync();
 
   const cohort = await store.cohorts.getCohort(id);
   if (!cohort) notFound();
@@ -72,7 +72,7 @@ export default async function SubmissionsPage({
             {submissions.map((item) => (
               <tr key={item.submission.id}>
                 <Td className="font-mono font-semibold">
-                  <Link href={`/admin/submissions/${item.submission.id}`} className="text-brand underline">
+                  <Link href={`/admin/submissions/${item.submission.id}`} className="text-brand-text underline">
                     {item.team.groupNumber}
                   </Link>
                 </Td>

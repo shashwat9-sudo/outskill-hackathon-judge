@@ -21,6 +21,8 @@ node_modules/
 dist/
 build/
 .next/
+# Alternate build dirs for long-running acceptance/demo servers (NEXT_DIST_DIR).
+.next-*/
 out/
 *.tsbuildinfo
 
@@ -63,3 +65,8 @@ supabase/.branches/
 .turbo/
 .cache/
 .eslintcache
+.vercel
+.env*
+
+# Local tool permissions. Machine-specific, and nobody else's business.
+.claude/settings.local.json

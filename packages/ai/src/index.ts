@@ -11,6 +11,8 @@ export * from './schemas';
 export * from './prompts';
 export * from './redaction';
 export * from './injection';
+export * from './evaluation-mode';
+export * from './schema-shape';
 export { demoResponder } from './demo-responder';
 
 import { createAiClient, type AiClient, type AiConfig } from './provider';
@@ -18,7 +20,7 @@ import { demoResponder } from './demo-responder';
 
 /** Build a client from validated environment configuration. */
 export function createAiClientFromEnv(env: {
-  AI_PROVIDER: 'demo' | 'anthropic' | 'openai' | 'custom';
+  AI_PROVIDER: 'demo' | 'anthropic' | 'openai' | 'gemini' | 'ollama' | 'custom';
   AI_MODEL?: string;
   AI_API_KEY?: string;
   AI_BASE_URL?: string;

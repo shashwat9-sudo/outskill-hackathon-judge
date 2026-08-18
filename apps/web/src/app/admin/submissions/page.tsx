@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation';
-import { getStore } from '@/lib/store';
+import { getStoreAsync } from '@/lib/store';
 import { requireAdmin } from '@/server/admin-auth';
 import { EmptyState } from '@/components/ui';
 
@@ -13,7 +13,7 @@ export const dynamic = 'force-dynamic';
  */
 export default async function SubmissionsEntryPage() {
   await requireAdmin();
-  const cohorts = await getStore().cohorts.listCohorts();
+  const cohorts = await (await getStoreAsync()).cohorts.listCohorts();
   const cohort = cohorts.find((c) => c.status === 'judging' || c.status === 'open') ?? cohorts[0];
 
   if (!cohort) {

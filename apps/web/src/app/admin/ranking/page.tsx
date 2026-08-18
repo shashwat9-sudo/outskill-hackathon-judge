@@ -1,6 +1,10 @@
 import Link from 'next/link';
-import { RUBRIC_CATEGORIES } from '@ohj/shared';
-import { getStore } from '@/lib/store';
+import {
+  JUDGING_UNAVAILABLE_MESSAGE,
+  RUBRIC_CATEGORIES,
+  storeCapabilities,
+} from '@ohj/shared';
+import { getStoreAsync } from '@/lib/store';
 import { requireAdmin } from '@/server/admin-auth';
 import {
   exportShortlistAction,
@@ -35,7 +39,25 @@ export const dynamic = 'force-dynamic';
  */
 export default async function ShortlistPage() {
   const session = await requireAdmin();
-  const store = getStore();
+  const store = await getStoreAsync();
+
+  // Judging is not available in this deployment (Phase B). Every read below
+  // reaches a gated repository, which throws rather than returning an empty
+  // result that would render as a real answer.
+  if (!storeCapabilities(store).ranking) {
+    return (
+      <div>
+        <PageHeading title="Shortlist" description="The private top 10, generated from assessment scores." />
+        <Alert tone="info" testId="judging-unavailable">
+          <p className="font-semibold">{JUDGING_UNAVAILABLE_MESSAGE}</p>
+          <p className="mt-2">
+            Teams can still submit, and cohorts, access codes and submissions all work normally.
+            Nothing is lost by waiting.
+          </p>
+        </Alert>
+      </div>
+    );
+  }
   const cohorts = await store.cohorts.listCohorts();
   const cohort = cohorts.find((c) => c.status === 'judging') ?? cohorts[0];
 
@@ -132,7 +154,7 @@ export default async function ShortlistPage() {
                     <div className="flex min-w-0 gap-4">
                       <span
                         aria-hidden="true"
-                        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-brand text-lg font-bold text-black"
+                        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-brand text-lg font-bold text-on-accent"
                       >
                         {entry.entry.rank}
                       </span>
@@ -218,7 +240,7 @@ export default async function ShortlistPage() {
                     <Td className="font-mono">
                       <Link
                         href={`/admin/submissions/${entry.submissionId}`}
-                        className="text-brand underline underline-offset-4"
+                        className="text-brand-text underline underline-offset-4"
                       >
                         {entry.groupNumber}
                       </Link>

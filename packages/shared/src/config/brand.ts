@@ -1,35 +1,48 @@
 /**
- * Brand tokens — the single source of truth.
+ * Brand tokens — the single source of truth for anything that is not CSS.
  *
- * The exact Outskill green has NOT been confirmed. `accent` and `accentHover`
- * below are documented placeholders (ADR-014). Replacing them, plus the two
- * matching CSS variables in `apps/web/src/app/globals.css`, changes the whole
- * product — nothing else hard-codes a colour.
+ * These mirror `DESIGN-SYSTEM.md` and the dark-theme block in
+ * `apps/web/src/app/globals.css`. The web interface reads the CSS variables,
+ * never this object; this exists for the places that cannot — generated PDFs,
+ * documentation, and scripts.
  *
- * See docs/BRANDING.md for the full token reference and the swap procedure.
+ * Two copies is one more than ideal. They are kept honest by
+ * `brand-tokens.test.ts`, which reads the stylesheet and compares.
  */
 
 export const BRAND = {
-  /** Placeholder accent — bright lime. Swap for the official green. */
-  accent: '#c8ff38',
-  accentHover: '#b7ee2f',
+  /** The brand colour. Warm orange, identical in both themes. */
+  accent: '#ff5e3a',
+  accentHover: '#ff7a5e',
+  accentPressed: '#e54a28',
+  /**
+   * Orange used AS TEXT.
+   *
+   * The same value in dark mode and a darker one in light, where raw accent on
+   * white is 3.2:1 and fails AA. Never use `accent` for text.
+   */
+  accentText: '#ff5e3a',
+  accentTextLight: '#c9391a',
+  /** Ink on an orange fill. Never white: 6.4:1 against the accent. */
+  accentInk: '#1a0a00',
 
-  /** Near-black page, charcoal and dark-green raised planes. */
-  background: '#060806',
-  surface: '#10140e',
-  surfaceRaised: '#161c13',
-  surfaceSoft: '#1d2419',
+  /** Near-black page, with three raised planes above it. */
+  background: '#0a0a0b',
+  surface: '#141418',
+  surfaceRaised: '#111114',
+  surfaceSoft: '#0c0c0e',
 
-  text: '#f4f7f1',
-  textMuted: '#9fa89a',
-  border: '#2a3326',
+  text: '#fafafa',
+  textMuted: '#a1a1a8',
+  border: '#26262c',
 
-  danger: '#ff6262',
+  danger: '#f87171',
+  /** No design-system token; see the note in globals.css. */
   warning: '#f3bd52',
-  success: '#77dd77',
+  success: '#4ade80',
 
   /** Reserved for links and technical information only. Never a primary action. */
-  link: '#7fc4ff',
+  link: '#60a5fa',
 
   black: '#000000',
   white: '#ffffff',

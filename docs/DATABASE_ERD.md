@@ -19,12 +19,15 @@ PostgreSQL (Supabase). All tables carry `created_at timestamptz not null default
   ┌──────────────┐──1:N──▶ cohort_ideas
   │   cohorts    │──1:N──▶ teams ──1:N──▶ team_members
   └──────┬───────┘           │
-         │                   └──1:1──▶ team_invites
+         │                   ├──1:1──▶ team_invites
+         │                   ├──1:N──▶ team_access_codes    (1 live, versioned)
+         │                   ├──1:N──▶ participant_sessions
          │                   │
          │                   └──1:1──▶ submissions ──┬──1:N──▶ submission_artifacts
          │                                           ├──1:1──▶ submission_credentials  (encrypted)
          │                                           ├──1:1──▶ submission_declarations
          │                                           ├──1:N──▶ submission_events
+         │                                           ├──1:N──▶ team_activity  (learner-safe)
          │                                           └──1:1──▶ assessment_jobs
          │                                                          │
          │                    ┌─────────────────────────────────────┤
@@ -44,7 +47,7 @@ PostgreSQL (Supabase). All tables carry `created_at timestamptz not null default
          ├──1:N──▶ ranking_snapshots ──1:N──▶ ranking_entries
          └──1:1──▶ final_selections (exactly 4 rows when complete)
 
-  resource_documents · audit_logs · system_settings   (global)
+  resource_documents · audit_logs · system_settings · verification_attempts  (global)
 ```
 
 ---
@@ -66,16 +69,24 @@ Only hashes stored. Rotation on login links the new session to the old via `rota
 ## 3. Cohorts, ideas, rubric
 
 ### `cohorts`
-`id · name · code (unique) · description · timezone (default 'Asia/Kolkata') · day12_start_at · day13_deadline_at · shortlist_target (default 10) · submission_instructions · rubric_version_id → rubric_versions · assessment_config (jsonb) · status · finalised_at`
+`id · name · code (unique) · description · timezone (default 'Asia/Kolkata') · day12_start_at · day13_deadline_at · shortlist_target (default 10) · submission_instructions · rubric_version_id → rubric_versions · assessment_config (jsonb) · status · finalised_at · closed_at · closure_type · accepting_until`
 
 `status ∈ {draft, open, paused, closed, judging, finalised, archived}` — CHECK-constrained; transitions validated in application code against an explicit table.
 
 `assessment_config` holds per-cohort worker settings (concurrency, per-submission budget, retry counts, consistency-pass triggers) so a cohort's judging parameters are frozen with it.
 
+`closed_at` records when submissions actually stopped being accepted and `closure_type ∈ {manual, deadline}` records how — an admin pressed close, or the clock did it.
+
+`accepting_until` is the reopening lever. It is set when an admin reopens **after** the official deadline, and writes are accepted until that instant even though `day13_deadline_at` has passed. A CHECK requires it to be later than `day13_deadline_at`, because a value before the deadline could only ever mean a mistake. Without this column, "reopened" would be a status that still rejects every save.
+
+Stored status is never the whole answer: acceptance is computed from the server clock on every write (`computeSubmissionWindow`), so a cohort still marked `open` past its effective deadline stops accepting writes at that instant whether or not a reconciliation job ever ran.
+
 ### `cohort_ideas`
-`id · cohort_id → cohorts (cascade) · title · slug · description · target_user · expected_use_case · minimum_core_flow (jsonb) · expected_entities (text[]) · ai_opportunity · allowed_scope · unsafe_interpretations · display_order · is_active`
+`id · cohort_id → cohorts (cascade) · title · slug · description · target_user · expected_use_case · minimum_core_flow (jsonb) · expected_entities (text[]) · ai_opportunity · allowed_scope · unsafe_interpretations · display_order · is_active · definition_status · definition_approved_at · definition_approved_by`
 
 Unique `(cohort_id, slug)`. Ideas are **per cohort**, so editing next cohort's ideas cannot retroactively change how a past cohort was judged.
+
+`definition_status ∈ {draft, approved}`, defaulting to `draft`. Title and description come from the approved source catalogue and are always usable; the expanded fields — minimum core flow, expected entities, AI opportunity, allowed scope, unsafe interpretations, target user, expected use case — are Outskill's interpretation and influence real judging only once approved (ADR-025). Editing any of them returns the row to `draft`, so an approval always refers to the wording someone actually read. A column comment on the table says the same thing, for whoever meets this in psql rather than here.
 
 ### `rubric_versions` / `rubric_categories`
 `rubric_versions: id · version (unique) · name · is_active · notes`
@@ -98,7 +109,26 @@ Unique `(cohort_id, group_number)` — the historical duplicate-group problem be
 ### `team_invites`
 `id · team_id → teams (cascade) · token_hash (unique) · token_prefix · issued_at · expires_at · revoked_at · last_accessed_at · access_count`
 
-Only the hash is stored. `token_prefix` (first 8 chars) exists solely so admins can identify a token in the UI without it being usable.
+Only the hash is stored. `token_prefix` (first 8 chars) exists solely so admins can identify a token in the UI without it being usable. Production teams use the common `/submit` entry below; this table now serves the demo fixtures and any invite distributed before that existed.
+
+### `team_access_codes`
+`id · team_id → teams (cascade) · cohort_id → cohorts (cascade) · group_number · code_hash (argon2id) · version (default 1) · created_at · revoked_at · last_verified_at · verify_count`
+
+The credential a production team actually uses, with the group number. **There is deliberately no column that could hold plaintext** — a code is shown once, at generation, and after that no query, no admin screen and no export can produce it. Losing one means issuing a new one.
+
+`version` is the revocation lever: incrementing it invalidates every session minted under the old code without having to find those sessions. Unique `(team_id, version)`, plus a partial unique index on `team_id where revoked_at is null` so a team can never have two live codes. Indexed on `(group_number, cohort_id)` — the lookup on the verification hot path.
+
+### `participant_sessions`
+`id · team_id → teams (cascade) · cohort_id → cohorts (cascade) · session_token_hash (unique) · editor_name · editor_role · access_code_version · created_at · last_active_at · expires_at · revoked_at · ip_hash`
+
+Only the hash; the cookie value never lands in the database. `editor_name` is an **activity label, not verified identity** — anyone holding the shared code can type any name, and nothing security-relevant may depend on it.
+
+`access_code_version` is compared against the team's live code on every resolve, which is what makes regeneration a one-row revocation of every open session. Partial indexes on `team_id` and `expires_at` where `revoked_at is null` cover the two questions asked of this table: who is editing now, and what has expired.
+
+### `verification_attempts`
+`id · cohort_id → cohorts (cascade, nullable) · group_number · ip_hash · attempts · window_started_at · locked_until · updated_at`
+
+Rate-limit state for `/submit`. Unique `(ip_hash, group_number)` — keyed on **both** so one hostile client cannot lock out a legitimate team, and one team fumbling its code cannot lock out an office behind a shared address. Eight attempts per fifteen minutes, then a fifteen-minute lockout an admin can clear. Partial index on `locked_until` where set, so finding current lockouts does not scan the table.
 
 ---
 
@@ -123,11 +153,15 @@ builder_stack · apis_used · external_templates
 -- lifecycle
 draft_updated_at · submitted_at · receipt_id (unique) · locked_at
 reopened_at · reopened_reason · is_late (generated)
+-- shared editing
+version (default 1) · last_edited_by · submitted_by_name
 ```
 
 **Unique `(cohort_id, team_id)`** — one submission per team per cohort, enforced by the database.
 
 `is_late` is computed by comparing `submitted_at` against the cohort deadline; lateness is a *fact*, and whether it disqualifies is a separate admin decision.
+
+`version` carries optimistic concurrency. Every write states the version it read; a write that is behind is refused rather than allowed to overwrite a teammate silently, and the client reloads. `last_edited_by` and `submitted_by_name` hold editor **labels**, not identities — they exist so a team can see who changed what and so an admin can answer "who pressed submit", not so anything can be attributed.
 
 ### `submission_artifacts`
 `id · submission_id (cascade) · kind ∈ {deck_pdf, demo_video, transcript, screenshot} · storage_bucket · storage_path · original_filename · mime_type · byte_size · checksum_sha256 · external_url · upload_completed_at · is_accessible · last_checked_at`
@@ -146,6 +180,13 @@ Seven booleans, all required true to submit, plus `accepted_at` and `accepted_ip
 
 ### `submission_events`
 Append-only participant-visible history: `id · submission_id (cascade) · event_type · actor_type ∈ {participant, shared-admin, system} · detail (jsonb)`.
+
+### `team_activity`
+`id · submission_id (cascade) · team_id (cascade) · kind · editor_name · section · created_at`
+
+What a team is shown about itself, and the reason it is a separate table from `audit_logs`: this one is rendered **back to learners**, so it carries only a closed set of participant-safe events. `kind` is CHECK-constrained to `draft_opened · section_saved · deck_replaced · demo_link_saved · review_opened · final_submitted` — an event kind that does not belong in the learner portal cannot be written here even by mistake. The internal audit log keeps everything else: admin actions, credential reveals, disqualification steps.
+
+Indexed `(submission_id, created_at desc)` — the portal reads the most recent handful and nothing else.
 
 ---
 
@@ -269,13 +310,26 @@ Runtime-tunable operational settings (worker concurrency, retry policy, per-subm
 
 ## 9. Row-level security
 
-RLS is enabled on every table. Three roles:
+RLS is enabled and forced on every table. Three roles:
 
 | Role | Grant |
 | --- | --- |
-| `participant` | Read/write **only** their own submission tree, resolved through a validated invite token. No SELECT policy exists on any `assessment_*`, `category_scores`, `ranking_*`, `final_selections`, or `feedback_reports` table — the policy is absent, so the answer is always zero rows. |
-| `admin` | Full access, gated by a verified shared-admin session. |
-| `worker` | Read submissions and write assessment tables. No access to `admin_account`, `admin_sessions`, or `audit_logs` beyond append. |
+| `ohj_participant` | Read/write **only** their own submission tree, resolved from a verified session. No SELECT policy exists on any `assessment_*`, `category_scores`, `ranking_*`, `final_selections`, or `feedback_reports` table — the policy is absent, so the answer is always zero rows. |
+| `ohj_admin` | Full access, gated by a verified shared-admin session. |
+| `ohj_worker` | Read submissions and write assessment tables. No access to `admin_account`, `admin_sessions`, or `audit_logs` beyond append. |
+
+### The four entry tables
+
+| Table | `ohj_admin` | `ohj_participant` | `ohj_worker` |
+| --- | --- | --- | --- |
+| `team_access_codes` | full | **no policy** | none |
+| `participant_sessions` | full | **no policy** | none |
+| `verification_attempts` | full | **no policy** | none |
+| `team_activity` | full | SELECT, own team only (`team_id = current_team_id()`) | none |
+
+The three absences are the point, and the migration says so where someone would otherwise add one. Verification and session handling run server-side with elevated privilege; a participant role able to SELECT `team_access_codes` could enumerate every group in the cohort, which is exactly what the single generic error message on `/submit` exists to prevent. The worker has no policy on any of the four either — assessment never needs to know who was signed in or how they got there.
+
+Grants match the policies rather than exceeding them: `ohj_participant` holds `select` on `team_activity` and nothing on the other three, because a grant that promises more than a policy allows reads as an intention nobody implemented. `delete` is revoked from every application role on all four, as elsewhere: nothing is deleted through the application.
 
 Application-layer authorisation is the primary control; RLS is defence in depth. Both must agree, and the negative E2E tests assert the participant boundary from the outside.
 
@@ -290,6 +344,10 @@ Beyond primary and foreign keys:
 - `category_scores (job_id)` — score assembly
 - `ranking_entries (snapshot_id, rank)` — ranking page
 - `audit_logs (entity_type, entity_id)` and `(cohort_id, created_at)` — history tabs
-- `team_invites (token_hash)` — the participant hot path
+- `team_invites (token_hash)` — the invite path
+- `team_access_codes (group_number, cohort_id)` — the participant hot path, and `(team_id) where revoked_at is null` unique, so one live code per team is a constraint rather than a convention
+- `participant_sessions (team_id)` and `(expires_at)`, both partial where not revoked — who is editing now, and what has expired
+- `team_activity (submission_id, created_at desc)` — the portal's activity panel
+- `verification_attempts (ip_hash, group_number)` unique and `(locked_until)` partial where set — rate-limit reads on every verification attempt
 
-At 500 submissions per cohort every table is small; indexes are for predictable latency under concurrent worker claims, not for data volume.
+At 500 submissions per cohort every table is small; indexes are for predictable latency under concurrent worker claims, not for data volume. The exception is the verification path, which is hit hardest exactly when several hundred teams arrive in the same hour.

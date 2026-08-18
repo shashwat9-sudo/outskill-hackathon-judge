@@ -9,14 +9,28 @@
 export * from './rubric/index';
 
 export * from './domain/status';
+export * from './domain/artifact-state';
 export * from './domain/deadline';
 export * from './domain/disqualification';
 export * from './domain/ranking';
 export * from './domain/ids';
+export * from './domain/submission-window';
+export * from './domain/concurrency';
+export * from './domain/cohort-exclusivity';
+export * from './domain/cohort-deletion';
+export * from './domain/missing-items';
+export * from './utils/learner-sheet';
+export * from './domain/receipt-pdf';
+export * from './domain/document-pdf';
+export * from './content/submission-guide';
+export * from './content/learner-guidance';
+export * from './content/completed-example';
 
 export * from './security/url';
 export * from './security/crypto';
 export * from './security/password';
+export * from './security/access-code';
+export * from './security/participant-session';
 
 export * from './schemas/submission';
 
@@ -35,3 +49,10 @@ export * from './config/env';
 export * from './config/brand';
 export * from './utils/logger';
 export * from './utils/csv';
+
+// Production Postgres driver. Server-only: reaches `pg` and `@supabase/supabase-js`.
+export * from './data/postgres/client';
+export * from './data/postgres/storage';
+export * from './data/postgres/store';
+export * from './data/postgres/unavailable';
+export * from './data/postgres/bootstrap';

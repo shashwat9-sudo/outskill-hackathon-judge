@@ -35,13 +35,19 @@ The Overview page carries a **Run this cohort** checklist. Exactly one item is m
 | --- | --- | --- |
 | 1 | Configure cohort | Name, code, timezone and the Day 12 → Day 13 schedule exist |
 | 2 | Review approved ideas | At least one idea is configured for the cohort |
-| 3 | Import teams and generate invite links | At least one team is imported |
+| 3 | Import teams and issue access codes | At least one team is imported |
 | 4 | Open submissions | The cohort has reached `open` |
 | 5 | Close submissions and start judging | Assessment has begun |
 | 6 | Review the top 10 | A shortlist snapshot exists |
 | 7 | Select four finalists | Exactly four are recorded |
 
 Each row has one relevant action, so there is never a question about where to go next.
+
+### Finding a submission by receipt ID
+
+Also on the Overview page, above the checklist. A receipt ID is the only identifier a learner can quote — *"my receipt says OSK-…"* — and without this, answering that message means scanning a list of five hundred.
+
+Input is normalised generously: wrong case, stray spaces, quotes pasted from a chat message. A miss says so plainly and points at the usual cause, a transcription slip between `I` and `1` or `O` and `0`. A hit shows the group, the product and when it was submitted, and links straight to the submission.
 
 ### Creating a cohort
 
@@ -61,11 +67,49 @@ The field that matters most is **minimum core flow**: one concrete, observable s
 
 Deactivating an idea is a soft delete — submissions that already chose it keep resolving it.
 
-### Teams and invites
+#### Approving a definition
+
+Title and description come from the approved idea catalogue and are always used. Everything else — target user, expected use case, minimum core flow, expected entities, AI opportunity, allowed scope, unsafe interpretations — is **our** interpretation, and it is what test-plan generation reads. So each idea carries a badge: *definition approved* or *definition in draft*, and the page counts how many are still in draft.
+
+An unapproved definition does not stop a team choosing the idea. It means the expanded fields do not yet influence real judging (ADR-025). Read them and press **Approve definition** before judging starts. Editing any expanded field afterwards returns it to draft, because approval is of a specific wording, not of an idea in general.
+
+### Teams and access codes
 
 Import a CSV with group number, lead name, lead email and lead phone. Column headings are matched by alias, and rows that cannot be imported are **reported with their row number** rather than silently skipped.
 
-Then download the invite CSV and distribute it through your own channel. Only the token hash is stored, so a lost link is regenerated, never recovered. **Regenerate** issues a new link and kills the old one immediately; **Revoke** kills it with no replacement.
+Then issue access codes. Teams reach one common submission URL — the page shows exactly the address to paste into Circle — and identify themselves there with their group number and code.
+
+| Control | What it does |
+| --- | --- |
+| **Issue new codes and download** | Issues a fresh code to **every** team in the cohort and downloads the sheet: group number, lead, code, and the submission URL. |
+| **Issue missing codes** | Covers only teams without a live code, so nobody who already has one is disturbed. Pressing it twice is safe. |
+| **Replace existing codes too** | The explicit opt-in on that form. Every team gets a new code and everyone currently editing is signed out. |
+| **Revoke code** | Kills one team's code. Anyone editing under it is signed out immediately, and they cannot get back in until you issue a new one. |
+| **Clear lockout** | Ends a verification lockout for one group number, straight away. |
+
+**A code exists in plaintext for exactly one round trip** — generated, written into the sheet you download, then gone. Only the Argon2id hash is stored, and there is no column that could hold anything else. "Resend their code" is therefore never an option; the only answer is a new one. That is a deliberate trade: an operator who loses the sheet regenerates for the affected teams, which is a nuisance, while a system that could reprint every team's credential on demand is a much larger problem.
+
+It also means **issuing and downloading are one action**. Every button that issues a code downloads the sheet in the same step, because there is no later moment at which the code could be read. There is deliberately no standalone "download the codes" button: the only way one could work is by reissuing every code in the cohort, which would invalidate every sheet already distributed.
+
+There are three of them, and they differ only in scope:
+
+| Button | Covers | Who is signed out |
+| --- | --- | --- |
+| **Issue codes for teams that have none** | Teams without a live code | Nobody |
+| **New code** (on a team's row) | That one team | That team |
+| **Replace every code** | Every team in the cohort | Everyone |
+
+The first is the normal one. Run it after importing the allocation sheet, and again after importing a corrected sheet — teams already holding a working code are left alone. The last is for a sheet that has leaked.
+
+The sheet carries the group number, the member count, the WhatsApp link from the allocation sheet, the code and the submission URL, so you can send each code to the right group without looking anything up.
+
+Three figures sit at the top: teams with a live code, teams waiting for one, and how many people are editing right now. The teams table shows each team's code state — none, live, revoked or locked out, its version once it has been reissued, and either how many members are editing or when it was last used. Never the code. It does not exist to show.
+
+**Lockouts.** Eight wrong codes in fifteen minutes locks a group out for fifteen minutes. On the evening of a deadline those are fifteen minutes a team does not have, so clear it as soon as they ask. The counter is keyed on the hashed address *and* the group number, so one team's fumbling never locks out an office and one hostile client never locks out a team.
+
+**There is one way in.** Per-team invite links exist only for the demo fixtures; `/submit/[token]` returns 404 in production. This is deliberate. An invite link grants exactly what an access code grants while bypassing everything that protects one — no hashing, no rate limit, no lockout, no version to revoke — and a link in a URL is the thing that gets forwarded on. Two doors, one of them unwatched, is worse than one.
+
+Distribution is yours either way: the platform sends no email (ADR-024).
 
 ---
 
@@ -75,14 +119,31 @@ Every status change states its effect on participants *before* it happens, and t
 
 | Action | What it means to a team |
 | --- | --- |
-| **Open submissions** | Teams with valid invite links can edit and submit. |
-| **Pause submissions** | Learners can view their entries but cannot edit or submit. |
+| **Open submissions** | Teams with a valid access code can edit and submit. |
+| **Pause submissions** | Learners can view their entries but cannot edit or submit, and are told why. |
 | **Close submissions** | No further participant changes. Judging can begin. |
 | **Start judging** | Final submissions are queued for assessment. |
 | **Finalise cohort** | Marks judging complete. Demo credentials are destroyed under the retention policy. |
 | **Archive cohort** | Read-only forever. This cannot be undone. |
 
 Confirmation is required for closing, starting judging, finalising and archiving. Closing is not a technical state change to the person pressing it — it is the moment several hundred teams lose the ability to edit.
+
+### The submission window
+
+A separate panel on the cohorts page, because neither of its controls is a routine status change.
+
+**Nothing has to run for the deadline to work.** Acceptance is computed from the server clock on every save, so a cohort left open past its deadline stops accepting writes at the deadline whether or not any scheduled job ran (ADR-031). The panel says so, so nobody goes looking for a scheduler that does not exist.
+
+**Close submissions now** ends the window early. It requires typing `CLOSE SUBMISSIONS` exactly — deliberately awkward, because a stray double-click on deadline evening must not be able to cause it. The outcome is reported outside the form, since closing removes the form itself.
+
+**Reopen submissions** asks for two things:
+
+- a **reason**, which is recorded in the audit log and shown to the team;
+- an **accept edits until** time, which is *optional* before the official deadline and **required** after it.
+
+That requirement is not a UI nicety. Reopening after the deadline with no acceptance window would leave the cohort reading as open while rejecting every save — the most confusing state this system could present to a team that has just been told they may resubmit. The server refuses it; the form asks up front so nobody meets that refusal by surprise. When an acceptance window is set, the learner's deadline panel shows the extended time rather than the official one.
+
+Reopening one **team's** submission is different and lives on that submission's page: it unlocks a single entry, is audit-logged, and the team sees a panel explaining that it was reopened and why.
 
 ---
 
@@ -226,7 +287,10 @@ Worth restating, because the interface is built around it:
 
 - It will not pick winners. It ranks and shortlists; a person chooses four.
 - It will not disqualify anyone. It proposes, on eleven permitted grounds only; a person confirms, and confirmation is reversible.
-- It will not announce anything.
+- It will not announce anything, and it will not send email. Codes, links and outcomes all travel through Outskill's own channels.
+- It will not show you an access code, or let you recover one. Only its Argon2id hash exists.
+- It will not integrate with Circle. The submission URL is pasted there by hand; nothing here knows Circle exists.
+- It will not lock a team out permanently, and it will not depend on a scheduler to enforce a deadline.
 - It will not penalise a product it cannot test. Unsupported products are routed to a human.
 - It will not treat an outage as a failure. Retries are recorded and classified.
 - It will not act on a prompt-injection attempt, and will not penalise a team for one being detected.

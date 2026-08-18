@@ -25,7 +25,12 @@ const COHORT_TRANSITIONS: Record<CohortStatus, readonly CohortStatus[]> = {
   draft: ['open', 'archived'],
   open: ['paused', 'closed'],
   paused: ['open', 'closed'],
-  closed: ['judging', 'open'], // reopening a closed cohort is allowed (audit-logged)
+  // Archiving a closed cohort retires it without judging. A cohort run for a
+  // rehearsal, a pilot or an acceptance test is never judged, and the only
+  // route to `archived` used to run through `judging` and `finalised` — so the
+  // safe way to retire one was to fake a judging run first. The confirmation
+  // states how many final submissions would never be assessed.
+  closed: ['judging', 'open', 'archived'],
   judging: ['closed', 'finalised'], // back to closed to re-run assessment
   finalised: ['judging', 'archived'], // reversible until archived
   archived: [],

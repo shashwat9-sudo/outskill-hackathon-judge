@@ -25,6 +25,13 @@ const positiveInt = (fallback: number) =>
 export const envSchema = z.object({
   DEMO_MODE: booleanish.default(false),
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+  /**
+   * The public base URL.
+   *
+   * Printed on every access-code sheet as the submission address, so a wrong
+   * value sends every team somewhere that does not exist. The localhost default
+   * is convenient for development and is REFUSED in production below.
+   */
   APP_BASE_URL: z.string().url().default('http://localhost:3000'),
 
   ADMIN_SEED_USERNAME: z.string().optional(),
@@ -35,17 +42,54 @@ export const envSchema = z.object({
   CREDENTIAL_KEY_VERSION: positiveInt(1),
 
   SUPABASE_URL: z.string().optional(),
+  /**
+   * Server-side Supabase key, `sb_secret_...`. Bypasses RLS entirely, so it is
+   * server-only and must never be prefixed with NEXT_PUBLIC_.
+   */
+  SUPABASE_SECRET_KEY: z.string().optional(),
+  /**
+   * The pre-2026 key for the same job. Accepted so an existing deployment keeps
+   * working, but a new setup should use SUPABASE_SECRET_KEY — the legacy key is
+   * being retired by Supabase and cannot be rotated independently.
+   */
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),
+  /**
+   * Postgres connection string. For the serverless web tier this must be the
+   * TRANSACTION pooler: a session-pooler connection holds a backend for the
+   * life of the connection, and a few hundred concurrent functions exhaust the
+   * server long before they exhaust the pooler (ADR-032).
+   */
   DATABASE_URL: z.string().optional(),
+  /** Pool ceiling per serverless instance. One or two is correct, not ten. */
+  DATABASE_POOL_MAX: positiveInt(2),
 
-  AI_PROVIDER: z.enum(['demo', 'anthropic', 'openai', 'custom']).default('demo'),
+  AI_PROVIDER: z
+    .enum(['demo', 'anthropic', 'openai', 'gemini', 'ollama', 'custom'])
+    .default('demo'),
   AI_MODEL: z.string().optional(),
   AI_API_KEY: z.string().optional(),
   AI_BASE_URL: z.string().optional(),
   AI_MAX_RETRIES: positiveInt(2),
   AI_TIMEOUT_MS: positiveInt(60_000),
 
+  /**
+   * What the external model is allowed to see.
+   *
+   * `synthetic_only` is the internal-evaluation setting: the pipeline will send
+   * demo and test data to a provider, and refuses outright to send a real
+   * learner submission. It exists because the free tier is being used to
+   * evaluate the product, and free tiers are exactly where a provider's data
+   * retention terms are least favourable — a learner's deck should not be the
+   * thing that finds that out.
+   *
+   * `production` permits real cohorts. It is not the default: enabling it has
+   * to be a decision somebody made.
+   */
+  AI_EVALUATION_MODE: z.enum(['synthetic_only', 'production']).default('synthetic_only'),
+
   WORKER_ID: z.string().optional(),
+  /** Where the worker serves /healthz and /readyz. Container-internal only. */
+  WORKER_HEALTH_PORT: positiveInt(8080),
   WORKER_CONCURRENCY: positiveInt(4),
   WORKER_POLL_INTERVAL_MS: positiveInt(2000),
   BROWSER_TEST_BUDGET_MS: positiveInt(480_000),
@@ -95,10 +139,31 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
     if (!env.CREDENTIAL_ENCRYPTION_KEY) {
       problems.push('CREDENTIAL_ENCRYPTION_KEY must be set when DEMO_MODE is off.');
     }
-    if (!env.DATABASE_URL && !env.SUPABASE_URL) {
-      problems.push('DATABASE_URL or SUPABASE_URL must be set when DEMO_MODE is off.');
+    if (!env.DATABASE_URL) {
+      problems.push('DATABASE_URL must be set when DEMO_MODE is off.');
     }
-    if (env.AI_PROVIDER !== 'demo' && !env.AI_API_KEY) {
+    if (!env.SUPABASE_URL) {
+      problems.push('SUPABASE_URL must be set when DEMO_MODE is off.');
+    }
+    if (!env.SUPABASE_SECRET_KEY && !env.SUPABASE_SERVICE_ROLE_KEY) {
+      problems.push(
+        'SUPABASE_SECRET_KEY must be set when DEMO_MODE is off (or the legacy SUPABASE_SERVICE_ROLE_KEY).',
+      );
+    }
+    // A local APP_BASE_URL is NOT a boot failure.
+    //
+    // It used to be, and that was enforcement in the wrong place: running the
+    // real application against the real database on this machine — which is
+    // exactly what a pre-launch acceptance test is — became impossible, while
+    // the actual harm was never about the server.
+    //
+    // The harm is a code sheet that tells five hundred teams to visit
+    // localhost. That is refused where the sheet is produced
+    // (`assertDistributableBaseUrl`), so the guarantee is stronger: it now
+    // covers a URL that becomes local after boot, which a startup check could
+    // never see.
+    // Ollama runs on this machine and has nothing to authenticate against.
+    if (env.AI_PROVIDER !== 'demo' && env.AI_PROVIDER !== 'ollama' && !env.AI_API_KEY) {
       problems.push(`AI_API_KEY must be set when AI_PROVIDER is "${env.AI_PROVIDER}".`);
     }
   }
@@ -131,4 +196,46 @@ export function isDemoMode(env: Env = getEnv()): boolean {
  */
 export function isRetentionDeletionEnabled(env: Env = getEnv()): boolean {
   return env.NODE_ENV === 'production' && !env.DEMO_MODE;
+}
+
+/**
+ * The server-side Supabase key.
+ *
+ * Prefers the current `sb_secret_...` key and falls back to the legacy
+ * service-role key so an existing deployment is not broken by the rename. Both
+ * bypass RLS; neither may ever reach a browser.
+ */
+export function supabaseSecretKey(env: Env = getEnv()): string | undefined {
+  return env.SUPABASE_SECRET_KEY ?? env.SUPABASE_SERVICE_ROLE_KEY;
+}
+
+/** True when only the retired key is configured, so setup can say so. */
+export function usingLegacySupabaseKey(env: Env = getEnv()): boolean {
+  return !env.SUPABASE_SECRET_KEY && Boolean(env.SUPABASE_SERVICE_ROLE_KEY);
+}
+
+
+/** Addresses that only work on the machine serving them. */
+const LOCAL_ADDRESS = /localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]/;
+
+export function isLocalBaseUrl(url: string): boolean {
+  return LOCAL_ADDRESS.test(url);
+}
+
+/**
+ * Refuse to produce anything a learner will be sent.
+ *
+ * Called before an access-code sheet or a distribution file is built. A local
+ * address in that file sends every team somewhere that does not exist, and the
+ * codes are one-time — reissuing them invalidates the sheet that was already
+ * distributed, so the mistake costs a full rotation to undo.
+ */
+export function assertDistributableBaseUrl(baseUrl: string): void {
+  if (!isLocalBaseUrl(baseUrl)) return;
+  throw new ConfigError([
+    `APP_BASE_URL is "${baseUrl}", which only works on this machine. ` +
+      'It is printed on every access-code sheet as the submission address, so teams would be ' +
+      'sent somewhere unreachable. Set it to the address learners will actually use before ' +
+      'issuing codes. Running locally for testing is fine — producing a sheet is not.',
+  ]);
 }

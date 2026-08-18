@@ -125,7 +125,7 @@ function OverviewTab({ detail, csrfToken }: { detail: AdminSubmissionDetail; csr
             {
               term: 'URL',
               description: s.productUrl ? (
-                <a href={s.productUrl} rel="noreferrer noopener nofollow" className="text-brand underline">
+                <a href={s.productUrl} rel="noreferrer noopener nofollow" className="text-brand-text underline">
                   {s.productUrl}
                 </a>
               ) : (
@@ -402,10 +402,34 @@ function ArtifactsTab({ detail }: { detail: AdminSubmissionDetail }) {
                       <a
                         href={artifact.externalUrl}
                         rel="noreferrer noopener nofollow"
-                        className="text-brand underline"
+                        className="text-brand-text underline"
                       >
                         {artifact.externalUrl}
                       </a>
+                    ) : artifact.kind === 'deck_pdf' ? (
+                      // The bucket is private, so the deck is reachable only
+                      // through a short-lived signed URL minted per request.
+                      // Showing the storage path alone left a reviewer with a
+                      // file they could see the existence of and not read.
+                      <div className="flex flex-wrap items-center gap-3">
+                        <a
+                          href={`/api/admin/submissions/${detail.submission.id}/deck`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="font-semibold text-brand-text underline"
+                        >
+                          View deck
+                        </a>
+                        <a
+                          href={`/api/admin/submissions/${detail.submission.id}/deck?download=1`}
+                          className="font-semibold text-brand-text underline"
+                        >
+                          Download deck
+                        </a>
+                        <span className="font-mono text-xs text-muted">
+                          {artifact.originalFilename ?? artifact.storagePath}
+                        </span>
+                      </div>
                     ) : (
                       <span className="font-mono text-xs">{artifact.storagePath}</span>
                     )}

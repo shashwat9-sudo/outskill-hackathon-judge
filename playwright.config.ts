@@ -28,6 +28,34 @@ export default defineConfig({
     url: `http://127.0.0.1:${PORT}`,
     reuseExistingServer: !process.env.CI,
     timeout: 240_000,
-    env: { DEMO_MODE: '1', NODE_ENV: 'production' },
+    /**
+     * A hermetic server.
+     *
+     * Every variable the application reads from `.env.local` is neutralised
+     * here, because Next.js loads that file for `next start` too. A developer
+     * with real credentials on disk was otherwise running the end-to-end suite
+     * against a server holding production seeds — which is how the admin tests
+     * started failing to sign in: `ADMIN_SEED_USERNAME` was set, so the demo
+     * fallback the tests rely on never applied.
+     *
+     * Empty strings rather than deletions: Next only fills a key that is
+     * `undefined`, so an empty value is what actually blocks the file from
+     * being read back in.
+     */
+    env: {
+      DEMO_MODE: '1',
+      NODE_ENV: 'production',
+      // Demo credentials must win, so the seeds have to be absent.
+      ADMIN_SEED_USERNAME: '',
+      ADMIN_SEED_PASSWORD: '',
+      // Nothing real may be reachable from a test run.
+      DATABASE_URL: '',
+      SUPABASE_URL: '',
+      SUPABASE_SECRET_KEY: '',
+      SUPABASE_SERVICE_ROLE_KEY: '',
+      AI_API_KEY: '',
+      AI_PROVIDER: 'demo',
+      APP_BASE_URL: `http://127.0.0.1:${PORT}`,
+    },
   },
 });

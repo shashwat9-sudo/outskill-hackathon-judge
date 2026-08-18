@@ -61,8 +61,20 @@ function demoDayBoundary(daysFromToday: number, hour: number, minute: number): D
 }
 
 export const DEMO_NOW = SESSION_START;
-/** Day 12 opened this morning at 09:00 IST. */
-export const DEMO_DAY12_START = demoDayBoundary(0, 9, 0);
+
+/**
+ * Day 12 opened at 09:00 IST, on the most recent day that has actually passed.
+ *
+ * "Today at 09:00" is wrong for anyone starting the demo before 09:00 IST — the
+ * cohort would not have opened yet, and every editing surface would be
+ * read-only. That is a nine-hour window each night in which the demo silently
+ * teaches the wrong thing about the product, so the boundary is clamped into
+ * the past rather than assumed to be there.
+ */
+export const DEMO_DAY12_START = (() => {
+  const thisMorning = demoDayBoundary(0, 9, 0);
+  return thisMorning <= SESSION_START ? thisMorning : demoDayBoundary(-1, 9, 0);
+})();
 /** Day 13 closes tomorrow at 11:59 PM IST — always in the future. */
 export const DEMO_DEADLINE = demoDayBoundary(1, 23, 59);
 /** Day 14 shortlist is due the day after, at 10:00 AM IST. */
@@ -226,6 +238,26 @@ export const DEMO_SCENARIO_META: Record<
     tone: 'warning',
   },
 };
+
+/**
+ * A stable access code per demo team.
+ *
+ * Derived from the group number so the demo home can print working codes and an
+ * operator can exercise the real /submit verification flow. Digits 0 and 1 and
+ * letters I, L, O, U are absent from the alphabet, so a group number cannot be
+ * embedded literally — the code is a deterministic mapping instead.
+ */
+const DEMO_CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTVWXYZ23456789';
+
+export function demoAccessCode(groupNumber: number): string {
+  const digest = deterministicId(NS, `access-code-${groupNumber}`).replace(/-/g, '');
+  let code = '';
+  for (let i = 0; i < 12; i++) {
+    const value = parseInt(digest.slice(i * 2, i * 2 + 2), 16);
+    code += DEMO_CODE_ALPHABET[value % DEMO_CODE_ALPHABET.length];
+  }
+  return code;
+}
 
 export const demoTeamId = (groupNumber: number) => id(`team-${groupNumber}`);
 export const demoSubmissionId = (groupNumber: number) => id(`submission-${groupNumber}`);

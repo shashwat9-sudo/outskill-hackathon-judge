@@ -27,7 +27,14 @@ describe('demo dates are never expired', () => {
   });
 
   it('places the Day 12 start at or before now, so the cohort is already running', () => {
-    expect(DEMO_DAY12_START.getTime()).toBeLessThanOrEqual(DEMO_NOW.getTime() + 1000);
+    // Held at every hour of the day, not just after 09:00 IST. Before that the
+    // naive "today at 09:00" boundary sits in the future and the whole demo is
+    // read-only — nine hours a night of teaching the wrong thing.
+    expect(DEMO_DAY12_START.getTime()).toBeLessThanOrEqual(DEMO_NOW.getTime());
+  });
+
+  it('opens the window strictly before it closes', () => {
+    expect(DEMO_DAY12_START.getTime()).toBeLessThan(DEMO_DEADLINE.getTime());
   });
 
   it('places the shortlist deadline after the submission deadline', () => {
@@ -103,17 +110,36 @@ describe('demo invite links survive module reloading', () => {
 
   it('returns a usable token for all six demo teams', async () => {
     const store = new MemoryDataStore();
+    await store.whenReady();
     const demo = asDemoStore(store);
 
     for (const team of DEMO_TEAMS) {
       const token = demo?.getDemoInviteToken(demoTeamId(team.groupNumber));
       expect(token, `group ${team.groupNumber} has no invite token`).toBeTruthy();
 
-      // Every token must actually resolve to that team's submission.
-      const view = await store.participant.resolveInvite(token as string);
-      expect(view?.team.groupNumber, `group ${team.groupNumber} token does not resolve`).toBe(
-        team.groupNumber,
-      );
+      // Every token must actually mint a session for that team.
+      const session = await store.participant.redeemInviteToken(token as string, {
+        name: 'Demo editor',
+        role: null,
+      });
+      expect(session, `group ${team.groupNumber} token does not resolve`).not.toBeNull();
+
+      const view = await store.participant.resolveSession(session?.token as string);
+      expect(view?.team.groupNumber).toBe(team.groupNumber);
+    }
+  });
+
+  it('exposes a working access code for every demo team', async () => {
+    const store = new MemoryDataStore();
+    await store.whenReady();
+
+    for (const team of DEMO_TEAMS) {
+      const result = await store.participant.verifyTeamAccess({
+        groupNumber: team.groupNumber,
+        code: store.getDemoAccessCode(team.groupNumber),
+        ipHash: `ip-${team.groupNumber}`,
+      });
+      expect(result.ok, `group ${team.groupNumber} code does not verify`).toBe(true);
     }
   });
 

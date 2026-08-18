@@ -8,7 +8,7 @@ Material choices and assumptions. Each entry: the decision, why, and what it cos
 
 The playbook PDF describes a **three-day** hackathon; the brief specifies a 14-day accelerator with the hackathon on Days 12–13 and a deadline of 11:59 PM IST on Day 13. Similar conflicts exist on demo length and the submission mechanism.
 
-**Decision:** the brief is authoritative. No three-day language appears anywhere in the product; the submission form asks "what changed from Day 12 to Day 13"; demo length is capped at three minutes; access is by invite token, not a portal account.
+**Decision:** the brief is authoritative. No three-day language appears anywhere in the product; the submission form asks "what changed from Day 12 to Day 13"; demo length is capped at three minutes; access is a group number plus a shared team access code (ADR-027), not a portal account.
 
 **Cost:** learners reading the playbook will see contradictory guidance. Flagged to Outskill in `reference-analysis.md` §7 as a document that needs revision before the next cohort.
 
@@ -218,4 +218,76 @@ The brief says "Loom or approved demo-video link".
 
 No email provider is specified and none should be assumed.
 
-**Assumption:** invite distribution is a CSV export that Outskill sends through its existing channel. The system sends no email, which also removes a class of accidental-disclosure risk. Receipts are shown on screen and are re-viewable through the invite link.
+**Assumption:** credential distribution is a CSV export that Outskill sends through its existing channel. The system sends no email, which also removes a class of accidental-disclosure risk. Receipts are shown on screen, downloadable as a PDF, and re-viewable by signing in again.
+
+---
+
+### ADR-025 — Expanded idea definitions are approved before they judge anyone
+
+An idea's title and description come from the approved source catalogue. Everything else on it — target user, expected use case, minimum core flow, expected entities, AI opportunity, allowed scope, unsafe interpretations — is our interpretation of a two-sentence description, and it is exactly what test-plan generation reads. A team judged against an unreviewed interpretation is judged against something nobody agreed to.
+
+**Decision:** `cohort_ideas.definition_status ∈ {draft, approved}`, defaulting to `draft`. Title and description are always usable; the expanded fields influence real judging only once a person has read them and approved them. Editing any expanded field returns the row to draft automatically, so an approval always refers to a specific wording. The admin ideas page counts unapproved definitions and badges each one.
+
+**Cost:** an extra step before judging can start, and a demo fixture that deliberately ships one idea in draft so an operator meets the state before a real cohort does. The alternative was silent authority: our prose deciding outcomes because nobody was asked.
+
+---
+
+### ADR-026 — One common submission URL, and no Circle integration
+
+Learners live in Circle. The obvious move is an integration — an embed, an SSO handshake, an API that knows who is reading. Each of those adds a dependency on another product's availability and auth model during the two hours that matter most, in exchange for saving a team one paste.
+
+**Decision:** one common URL, `/submit`, with no team identifier in it. Outskill pastes it into Circle **by hand**. There is no Circle integration, no iframe and no API in either direction, and no code in this system knows Circle exists. The entry page knows nothing about where a learner arrived from.
+
+**Cost:** the URL has to be posted manually, and if it is posted wrongly nobody is redirected. Against that: nothing about submitting can break because a community platform changed a setting, and there is no OAuth surface to secure. The production root page carries the same call to action, so a mistyped path still lands somewhere useful.
+
+---
+
+### ADR-027 — Shared team access codes, not per-team links
+
+A per-team URL is a bearer credential in a form people forward without thinking. The first team to paste theirs into a group chat hands its submission to everyone reading, and the failure is invisible until someone edits.
+
+**Decision:** every team uses the common URL and identifies itself with a group number plus a shared access code: twelve characters, thirty-character alphabet with `O`, `0`, `I`, `1`, `L` and `U` removed, formatted `ABCD-EFGH-JKMN`, Argon2id-hashed, versioned, and shown exactly once at generation. Verification is rate limited to eight attempts per fifteen minutes per hashed IP **and** group, with a temporary lockout an admin can clear. Every failure returns one identical message, so the form cannot enumerate group numbers.
+
+**Cost:** a code is short enough to guess in a way a 256-bit token is not, which is why it needs a slow hash and rate limiting (T11), and why the entry form needs a single generic error (T12). A lost code cannot be resent — only reissued — because nothing stores plaintext. And a team can still share its own code; that is a team credential by design, and revocation is one click.
+
+---
+
+### ADR-028 — A signed handle, not a team id, between the two entry steps
+
+Entry is two steps: prove you hold the code, then say who is editing. Something has to carry the verified team across that gap. Re-posting the access code means posting it twice. Carrying a bare team id means anyone who learns or guesses one can mint a session without ever holding a code — which would make the code check decorative.
+
+**Decision:** an HttpOnly cookie holding a signed assertion — team id, expiry, HMAC-SHA-256 under the server secret — valid for ten minutes. Unforgeable without the secret, useless shortly afterwards, never in the DOM. Malformed, expired and wrongly-signed handles are indistinguishable: all three mean start over.
+
+**Cost:** `ADMIN_SESSION_SECRET` now also gates learner entry, so rotating it signs everyone out rather than only admins. That is documented in the runbook, and it is the correct blast radius for a compromised signing key.
+
+---
+
+### ADR-029 — The editor name is an activity label, not identity
+
+A team shares one code. Asking "who is editing?" looks like authentication and is not: anyone holding the code can type any name, including a teammate's.
+
+**Decision:** treat the name as an activity label everywhere and never as an identity claim. It is validated for length and control characters only, it is stored on `participant_sessions`, `submissions.last_edited_by`, `submissions.submitted_by_name` and `team_activity.editor_name`, and **no authorisation decision reads any of them**. The entry screen says so in plain words: it is not a login and it does not restrict anyone.
+
+**Cost:** no per-person attribution within a team, and no way to tell a mistyped name from a false one. Accepted — the alternative is per-member accounts, which the brief rules out and which buys nothing against someone who already holds the shared code. What the label does buy is real: a team can see who changed what, and can notice a name they do not recognise.
+
+---
+
+### ADR-030 — Optimistic concurrency, not last-write-wins
+
+Several team members hold the same code and edit at once, which on Day 13 is the normal case. Last-write-wins would silently discard a teammate's half hour minutes before a deadline, and nobody would find out until after submitting.
+
+**Decision:** `submissions.version`. Every write carries the version the client read; a write that is behind is refused, returns the current version and a plain message, and the client reloads. A client that has never read a version is treated as stale rather than let through — an unversioned write is exactly the silent overwrite this prevents. The team also sees a learner-safe activity feed, so concurrent work is visible before a collision rather than after it.
+
+**Cost:** when two people genuinely edit the same field, one of them retypes. That is worse for thirty seconds and much better than losing thirty minutes, and it is the only version of this that a team can be told about honestly.
+
+---
+
+### ADR-031 — The submission window is decided by the server clock, not by a scheduler
+
+A cohort's stored status can lag reality. If acceptance depended on a reconciliation job having run, a job that failed at 11:59 PM would leave the window open, and one that ran early would close it — both discovered by teams, not by us.
+
+**Decision:** `computeSubmissionWindow` evaluates status **and** the effective deadline against the server clock on every write: every draft save, upload, removal and final submit. A browser clock is never an input. A reconciliation job exists as a convenience for tidying stored status; nothing about what the system accepts depends on it having run.
+
+The manual controls live in the same module and are decided the same way: pause is read-only rather than closed, closing early is guarded by a typed `CLOSE SUBMISSIONS` in the admin action, and reopening takes a recorded reason. `validateReopen` refuses a reopen after the official deadline unless it carries an extension — a new deadline or an explicit `accepting_until` — because a reopened cohort without one would read as open while rejecting every save.
+
+**Cost:** the window is recomputed on every write rather than read from a column. At this scale that is arithmetic, not a query, and it removes an entire class of "the cron did not run" failure on the one night it would matter most.
