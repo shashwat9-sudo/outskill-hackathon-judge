@@ -285,3 +285,42 @@ export function createInMemoryStorage(): StorageAdapter & { objects: Map<string,
     },
   };
 }
+
+/**
+ * A Storage adapter for a process that holds no Storage credential.
+ *
+ * The worker is that process, deliberately. It captures evidence locally and
+ * gets it into a bucket by asking the web app for permission to write one
+ * object — so it needs a `StorageAdapter` to compose a data store, and must
+ * never be able to use one.
+ *
+ * Every method refuses. That is the point: if some future code path in the
+ * worker reaches for Storage directly, it fails loudly here rather than
+ * silently acquiring a capability the credential boundary exists to deny. A
+ * no-op adapter that returned empty results would be worse than either — it
+ * would let the worker believe an upload had happened.
+ *
+ * Composing this is an explicit statement by the caller, not something inferred
+ * from a missing environment variable. The web tier passes a real key and gets
+ * a real adapter; a web deployment whose key went missing still fails at boot,
+ * which is where it should fail.
+ */
+export function createCredentiallessStorage(): StorageAdapter {
+  const refuse = (operation: string): never => {
+    throw new Error(
+      `This process holds no Supabase Storage credential, so it cannot ${operation}. ` +
+        'Evidence is uploaded by asking the web app for a signed upload URL — see ' +
+        'apps/worker/src/evidence-upload.ts. If you are seeing this in the web tier, ' +
+        'SUPABASE_SECRET_KEY is missing.',
+    );
+  };
+
+  return {
+    createSignedDownloadUrl: async () => refuse('sign a download URL'),
+    createSignedUploadUrl: async () => refuse('sign an upload URL'),
+    upload: async () => refuse('upload an object'),
+    remove: async () => refuse('remove an object'),
+    statObject: async () => refuse('stat an object'),
+    downloadHead: async () => refuse('read an object'),
+  };
+}

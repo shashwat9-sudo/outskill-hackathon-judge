@@ -27,10 +27,36 @@
 -- docs/WORKER_DEPLOYMENT.md.
 -- ---------------------------------------------------------------------------
 
--- The role must not be able to step around RLS by being a superuser, inheriting
--- one, or carrying BYPASSRLS. Stated rather than assumed: this is the property
--- the whole migration depends on.
-alter role ohj_worker with nosuperuser nocreatedb nocreaterole nobypassrls noinherit;
+-- The role must not be able to step around RLS by being a superuser or carrying
+-- BYPASSRLS. This is the property the whole migration depends on: a role with
+-- either flag ignores every policy below, silently and with no error.
+--
+-- Checked rather than set. Changing those two attributes requires a true
+-- superuser, which the `postgres` role on Supabase is not — so an `alter role
+-- ... nosuperuser nobypassrls` fails outright on the platform this runs on. An
+-- assertion is the better shape regardless: if the property is ever violated,
+-- this migration stops and says so, instead of appearing to fix something it
+-- cannot reach.
+do $$
+declare r record;
+begin
+  select rolsuper, rolbypassrls into r from pg_roles where rolname = 'ohj_worker';
+
+  if not found then
+    raise exception 'ohj_worker does not exist. Apply 0002_rls.sql first.';
+  end if;
+
+  if r.rolsuper or r.rolbypassrls then
+    raise exception
+      'ohj_worker bypasses row-level security (superuser=%, bypassrls=%). Every policy in 0002 is decoration until a superuser clears those flags.',
+      r.rolsuper, r.rolbypassrls;
+  end if;
+end;
+$$;
+
+-- These the owner can set, and they are worth setting: a judging role has no
+-- business creating databases or roles.
+alter role ohj_worker with nocreatedb nocreaterole noinherit;
 
 -- ---------------------------------------------------------------------------
 -- Start from nothing
@@ -104,17 +130,15 @@ grant insert on audit_logs to ohj_worker;
 --   team_invites, submission_events, resource_documents
 --       Participant-facing records the worker has no business in.
 
+--   team_access_codes, participant_sessions
+--       Argon2id access-code hashes and live participant sessions. Never
+--       granted to the worker, before or after this migration — listed here so
+--       a later `grant ... on all tables` cannot quietly reach them.
 revoke all on
   ranking_snapshots, ranking_entries, final_selections,
   admin_account, admin_sessions, team_invites, submission_events,
-  resource_documents
+  resource_documents, team_access_codes, participant_sessions
 from ohj_worker;
-
--- Access-code hashes live on `teams`. The grant above is SELECT-only, so the
--- worker cannot alter one; it can read the hash column, which is Argon2id and
--- useless without the code. Splitting the column out is the stronger fix and is
--- a schema change, not a permissions one — recorded here rather than done
--- quietly as part of a grants migration.
 
 -- Future tables are not granted by default. A new table is unreachable by the
 -- worker until somebody writes the grant, which is the direction the mistake

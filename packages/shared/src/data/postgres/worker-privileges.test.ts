@@ -104,6 +104,23 @@ describe('the ranking tables, which decide nothing about winners', () => {
 });
 
 describe('credentials and sessions', () => {
+  it('cannot read access-code hashes or participant sessions', async () => {
+    /*
+     * Where access codes actually live.
+     *
+     * Not on `teams`, which is what an earlier draft of the migration claimed.
+     * These two tables have never been granted to the worker; they are named in
+     * the migration's revoke list so a later `grant ... on all tables` cannot
+     * quietly reach them, and asserted here so the claim stays true.
+     */
+    for (const table of ['team_access_codes', 'participant_sessions']) {
+      await expect(
+        asWorker(() => db.query(`select * from ${table} limit 1`)),
+        table,
+      ).rejects.toThrow(denied);
+    }
+  });
+
   it('cannot read the admin account or live sessions', async () => {
     // Password hashes and session tokens. Nothing in judging needs them, and a
     // worker that could read a session token could become an admin.

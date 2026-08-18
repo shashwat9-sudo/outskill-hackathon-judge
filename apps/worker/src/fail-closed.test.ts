@@ -57,12 +57,30 @@ describe('outside demo mode the worker refuses to start', () => {
 
 describe('what the worker is trusted with', () => {
   it('is not the Supabase secret key', async () => {
-    // It does not mint signed URLs and does not call the Storage API, so a key
-    // that bypasses RLS would be privilege with no use — and the worker is the
-    // process that drives a hostile participant's website.
+    /*
+     * It does not mint signed URLs and does not call the Storage API, so a key
+     * that bypasses RLS would be privilege with no use — and the worker is the
+     * process that drives a hostile participant's website.
+     *
+     * This used to assert the literal `supabaseSecretKey: ''`, which stopped
+     * being the mechanism: passing an empty key to `createPostgresDataStore`
+     * throws `supabaseKey is required` before the worker can start, so the
+     * worker now composes its store around a Storage adapter that refuses every
+     * call. The invariant is the same and the enforcement is stronger, so the
+     * assertion is written against the invariant rather than against a line.
+     */
     const text = await source();
-    expect(text).toMatch(/supabaseSecretKey: ''/);
+
+    // The key never enters this process, by any spelling.
+    expect(text).not.toMatch(/SUPABASE_SECRET_KEY/);
+    expect(text).not.toMatch(/SUPABASE_SERVICE_ROLE_KEY/);
     expect(text).not.toMatch(/supabaseSecretKey: env\./);
+    expect(text).not.toMatch(/serviceRoleKey/);
+
+    // And a real Storage client is never built here — the adapter that refuses
+    // is what the store is composed around.
+    expect(text).toMatch(/createCredentiallessStorage\(\)/);
+    expect(text).not.toMatch(/createSupabaseStorage/);
   });
 
   it('explains why in the code, so nobody helpfully adds it later', async () => {

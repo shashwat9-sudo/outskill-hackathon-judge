@@ -13,7 +13,8 @@ import { mkdir, rm } from 'node:fs/promises';
 import {
   MemoryDataStore,
   Logger,
-  createPostgresDataStore,
+  composePostgresDataStore,
+  createCredentiallessStorage,
   createPostgresDatabase,
   describeConnectionRole,
   loadEnv,
@@ -84,17 +85,27 @@ async function connectProductionStore(env: ReturnType<typeof loadEnv>): Promise<
     await probe.close();
   }
 
-  const store = await createPostgresDataStore({
-    databaseUrl: env.DATABASE_URL,
-    // Unused by the worker, but the store requires them to compose. They are
-    // read from the environment rather than invented so a misconfiguration
-    // surfaces here rather than at the first participant request.
-    supabaseUrl: env.SUPABASE_URL ?? '',
-    supabaseSecretKey: '',
+  /*
+   * Composed by hand, around a Storage adapter that refuses everything.
+   *
+   * `createPostgresDataStore` builds a real Supabase client, and a real client
+   * needs a real key — passing an empty one throws `supabaseKey is required`
+   * before the worker gets anywhere. That is not a reason to give the worker a
+   * Storage credential; the whole evidence design exists so it never holds one.
+   *
+   * So the worker states the situation instead of pretending: a credentialless
+   * adapter whose every method fails loudly. Evidence still reaches the bucket,
+   * by asking the web app for a signed URL that can write exactly one object.
+   */
+  const db = await createPostgresDatabase({
+    connectionString: env.DATABASE_URL,
+    maxConnections: env.DATABASE_POOL_MAX,
+  });
+
+  const store = composePostgresDataStore(db, createCredentiallessStorage(), {
     sessionSecret: env.ADMIN_SESSION_SECRET ?? '',
     credentialKey: env.CREDENTIAL_ENCRYPTION_KEY ?? '',
     credentialKeyVersion: env.CREDENTIAL_KEY_VERSION,
-    maxConnections: env.DATABASE_POOL_MAX,
   });
 
   // The claim is checked rather than assumed: a store that cannot assess must
