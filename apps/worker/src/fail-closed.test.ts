@@ -101,3 +101,47 @@ describe('the refusals name what is missing', () => {
     expect(await source()).toMatch(/stored safely/i);
   });
 });
+
+describe('the environment the worker will accept', () => {
+  /*
+   * Boot-time enforcement of the credential boundary.
+   *
+   * Two failures found while deploying: the shared env check demanded a Supabase
+   * Storage key of every non-demo process, so the worker could not start at all;
+   * and nothing stopped someone handing it one anyway. Both are the same
+   * mistake — a rule written for the web tier applied to a process with a
+   * different job.
+   */
+  const base = {
+    DEMO_MODE: '0',
+    DATABASE_URL: 'postgresql://u:p@aws-0-ap-south-1.pooler.supabase.com:6543/postgres',
+    SUPABASE_URL: 'https://example.supabase.co',
+    ADMIN_SESSION_SECRET: 'x'.repeat(48),
+    CREDENTIAL_ENCRYPTION_KEY: 'y'.repeat(48),
+    AI_PROVIDER: 'demo',
+  };
+
+  it('boots without a Supabase Storage key, which the web tier requires', async () => {
+    const { loadEnv } = await import('@ohj/shared');
+    expect(() => loadEnv(base, { storageCredential: 'absent' })).not.toThrow();
+    // The same environment is rejected for the web tier, which does need one.
+    expect(() => loadEnv(base)).toThrow(/SUPABASE_SECRET_KEY must be set/);
+  });
+
+  it('refuses to start if it is given one', async () => {
+    // The boundary runs both ways. A worker handed a general-purpose Storage
+    // credential does not quietly accept it.
+    const { loadEnv } = await import('@ohj/shared');
+    for (const key of ['SUPABASE_SECRET_KEY', 'SUPABASE_SERVICE_ROLE_KEY']) {
+      expect(
+        () => loadEnv({ ...base, [key]: 'sb_secret_realkey' }, { storageCredential: 'absent' }),
+        key,
+      ).toThrow(/must NOT be set/);
+    }
+  });
+
+  it('declares that intent in its own source, so the default cannot creep back', async () => {
+    const text = await source();
+    expect(text).toMatch(/storageCredential: 'absent'/);
+  });
+});

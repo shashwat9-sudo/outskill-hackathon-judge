@@ -151,7 +151,9 @@ async function assertNotSuperuser(db: SqlDatabase): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const env = loadEnv();
+  // Declared, not inferred: this process must hold no Storage credential, and
+  // is refused at boot if it is given one.
+  const env = loadEnv(process.env, { storageCredential: 'absent' });
   const workerId = env.WORKER_ID || `worker-${process.pid}`;
 
   const store: DataStore = env.DEMO_MODE

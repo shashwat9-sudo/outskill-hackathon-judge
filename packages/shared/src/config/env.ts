@@ -131,7 +131,32 @@ export class ConfigError extends Error {
  * a session secret or an encryption key is not a warning — the platform cannot
  * do its job safely without them.
  */
-export function loadEnv(source: Record<string, string | undefined> = process.env): Env {
+/**
+ * What this process is, for the purposes of what it must be given.
+ *
+ * The checks below were written for the web tier and applied to everything,
+ * which was fine until the worker existed. The worker holds no Supabase Storage
+ * credential — that is the whole point of the evidence design — so demanding one
+ * stopped it booting at all, while demanding nothing would have let a real web
+ * deployment start with a missing key.
+ *
+ * Stating the role makes both cases right, and lets the worker's case be
+ * enforced rather than merely tolerated.
+ */
+export interface LoadEnvOptions {
+  /**
+   * `required` — the default, and what the web tier needs: it signs URLs and
+   * streams objects, so a missing key is a boot failure.
+   *
+   * `absent` — the worker. It must not have one, and is refused if it does.
+   */
+  storageCredential?: 'required' | 'absent';
+}
+
+export function loadEnv(
+  source: Record<string, string | undefined> = process.env,
+  options: LoadEnvOptions = {},
+): Env {
   const parsed = envSchema.safeParse(source);
   if (!parsed.success) {
     throw new ConfigError(
@@ -154,7 +179,24 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
     if (!env.SUPABASE_URL) {
       problems.push('SUPABASE_URL must be set when DEMO_MODE is off.');
     }
-    if (!env.SUPABASE_SECRET_KEY && !env.SUPABASE_SERVICE_ROLE_KEY) {
+    if (options.storageCredential === 'absent') {
+      /*
+       * The worker, and the check runs the other way.
+       *
+       * It reaches Storage by asking the web app for a signed URL that can write
+       * one object; a key here would be a general-purpose credential held by the
+       * process that drives a hostile participant's website. Refusing to start
+       * is the correct response to being handed one — a warning would be
+       * ignored, and the boundary is only real if it is enforced.
+       */
+      if (env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY) {
+        problems.push(
+          'SUPABASE_SECRET_KEY must NOT be set for this process. It uploads evidence by asking ' +
+            'the web app for a signed URL, and must hold no Storage credential of its own. ' +
+            'Remove it from this environment.',
+        );
+      }
+    } else if (!env.SUPABASE_SECRET_KEY && !env.SUPABASE_SERVICE_ROLE_KEY) {
       problems.push(
         'SUPABASE_SECRET_KEY must be set when DEMO_MODE is off (or the legacy SUPABASE_SERVICE_ROLE_KEY).',
       );
