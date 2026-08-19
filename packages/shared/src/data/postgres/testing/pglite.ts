@@ -25,6 +25,7 @@ const SCHEMA_MIGRATIONS = [
   '0004_production_entry',
   '0005_operations_hardening',
   '0006_worker_least_privilege',
+  '0007_cohort_synthetic_marker',
 ] as const;
 
 /**

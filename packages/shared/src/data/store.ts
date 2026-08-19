@@ -284,8 +284,19 @@ export interface CohortStore {
    * surface must surface rather than resolve — see `checkCohortExclusivity`.
    */
   listLearnerFacingCohorts(): Promise<Cohort[]>;
-  createCohort(input: Omit<Cohort, 'id' | 'createdAt' | 'updatedAt' | 'finalisedAt'>): Promise<Cohort>;
-  updateCohort(id: string, patch: Partial<Cohort>): Promise<Cohort>;
+  /*
+   * `isSynthetic` is absent from both signatures on purpose.
+   *
+   * It decides whether a cohort's contents may be sent to an external provider
+   * under `synthetic_only`. Leaving it out of the input types means no route,
+   * form or import can express it — the compiler refuses before any runtime
+   * check is needed. Setting it is an operator action against the database, on
+   * a cohort known to contain no learner work.
+   */
+  createCohort(
+    input: Omit<Cohort, 'id' | 'createdAt' | 'updatedAt' | 'finalisedAt' | 'isSynthetic'>,
+  ): Promise<Cohort>;
+  updateCohort(id: string, patch: Partial<Omit<Cohort, 'isSynthetic'>>): Promise<Cohort>;
   setCohortStatus(id: string, status: CohortStatus): Promise<Cohort>;
 
   /** Manual close. Records when and that it was an admin action. */

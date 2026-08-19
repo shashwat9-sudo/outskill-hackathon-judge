@@ -182,6 +182,9 @@ export function seedDemoDatabase(db: MemoryDatabase): void {
     closedAt: null,
     closureType: null,
     acceptingUntil: null,
+    // Demo fixtures are synthetic, and now say so rather than being recognised
+    // by which database engine they happen to live in.
+    isSynthetic: true,
   };
   db.cohorts.push(cohort);
 

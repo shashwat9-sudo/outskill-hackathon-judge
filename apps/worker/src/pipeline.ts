@@ -123,15 +123,33 @@ export interface StageOutcome {
  */
 function guardDispatch(
   job: AssessmentJob,
-  cohort: { id: string; name: string },
+  cohort: { id: string; name: string; isSynthetic: boolean },
   ctx: StageContext,
 ): void {
   if (ctx.ai.providerName === 'demo') return;
 
-  const isDemoData = ctx.store.driver === 'memory' || ctx.contentIsSyntheticForControlledRun === true;
+  /*
+   * Whether this may leave for a provider is a fact about the cohort, read
+   * from the cohort.
+   *
+   * It used to be inferred from the database driver: memory meant synthetic,
+   * Postgres meant real. That was safe in the direction that mattters and wrong
+   * in the other — a fixture cohort in production Postgres was indistinguishable
+   * from the learner cohorts beside it, so the deployed worker could not be
+   * proven end to end without relaxing `synthetic_only` for everything at once.
+   *
+   * `is_synthetic` is persisted, defaults to false, cannot be expressed by the
+   * create or update types, and is never derived from a name, a group number,
+   * an email domain, DEMO_MODE or the driver. Each of those can be accidentally
+   * true for a cohort full of real work.
+   *
+   * `contentIsSyntheticForControlledRun` remains for the controlled run script,
+   * which operates on a database it has just built. The worker never sets it.
+   */
+  const isSynthetic = cohort.isSynthetic || ctx.contentIsSyntheticForControlledRun === true;
   assertDispatchAllowed(ctx.env.AI_EVALUATION_MODE, {
-    isDemoCohort: isDemoData,
-    isSyntheticSubmission: isDemoData,
+    isDemoCohort: isSynthetic,
+    isSyntheticSubmission: isSynthetic,
     cohortName: cohort.name,
     correlationId: anonymiseSubmissionId(job.submissionId, cohort.id),
   });

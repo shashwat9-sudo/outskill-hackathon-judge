@@ -61,6 +61,15 @@ export interface Cohort {
   rubricVersion: string;
   assessmentConfig: AssessmentConfig;
   status: CohortStatus;
+  /**
+   * True only for fixture cohorts that contain no learner work.
+   *
+   * The one thing that permits AI dispatch under `synthetic_only`. Persisted
+   * rather than inferred: it is never derived from the cohort's name, its
+   * group numbers, an email domain, DEMO_MODE or the database driver, because
+   * every one of those can be true by accident for a real cohort.
+   */
+  isSynthetic: boolean;
   finalisedAt: Date | null;
   /** When submissions actually stopped being accepted. */
   closedAt: Date | null;

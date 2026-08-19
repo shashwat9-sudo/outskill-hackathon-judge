@@ -292,6 +292,16 @@ export function buildCohortStore(db: SqlDatabase): CohortStore {
       const writable = { ...patch };
       // Derived on read and never written directly.
       delete (writable as Record<string, unknown>).rubricVersion;
+      /*
+       * Whether a cohort is synthetic is not editable through the admin API.
+       *
+       * It decides whether this cohort's contents may be sent to an external
+       * provider under `synthetic_only`, so a patch that could set it would put
+       * that decision behind any route that ends in `updateCohort` — including
+       * a form post. Setting it is an operator action against the database, on
+       * a cohort known to hold no learner work.
+       */
+      delete (writable as Record<string, unknown>).isSynthetic;
       delete (writable as Record<string, unknown>).id;
       delete (writable as Record<string, unknown>).createdAt;
       delete (writable as Record<string, unknown>).updatedAt;
