@@ -131,8 +131,8 @@ function mockSupabase() {
       calls.push({ bucket, method: 'createSignedUrl', args: [path, expiresIn] });
       return { data: { signedUrl: `https://storage.invalid/${bucket}/${path}?token=x` }, error: null };
     }),
-    createSignedUploadUrl: vi.fn(async (path: string) => {
-      calls.push({ bucket, method: 'createSignedUploadUrl', args: [path] });
+    createSignedUploadUrl: vi.fn(async (path: string, options?: unknown) => {
+      calls.push({ bucket, method: 'createSignedUploadUrl', args: [path, options] });
       return { data: { signedUrl: `https://storage.invalid/upload/${path}`, token: 'tok' }, error: null };
     }),
     upload: vi.fn(async (path: string, body: Uint8Array, options: unknown) => {
@@ -153,6 +153,24 @@ function mockSupabase() {
 }
 
 describe('the Supabase adapter', () => {
+  it('asks for an upsert, so a re-run can overwrite its own evidence', async () => {
+    /*
+     * Evidence paths are derived from the cohort, submission, job and kind, so
+     * a retry lands on exactly the path its previous attempt used. Supabase
+     * refuses to sign an upload for an occupied path unless told otherwise,
+     * which made the documented idempotency untrue: the first run stored a
+     * trace and every later run failed to authorise one, leaving older evidence
+     * in place describing a different run.
+     */
+    const calls = mockSupabase();
+    const storage = await createSupabaseStorage({ url: 'https://x.invalid', serviceRoleKey: 'k' });
+
+    await storage.createSignedUploadUrl('traces', 'c/s/j/trace/desktop.zip');
+
+    const call = calls.find((c) => c.method === 'createSignedUploadUrl');
+    expect(call?.args[1]).toEqual({ upsert: true });
+  });
+
   it('caps a signed URL expiry, because the URL is a bearer credential', async () => {
     const calls = mockSupabase();
     const storage = await createSupabaseStorage({ url: 'https://x.invalid', serviceRoleKey: 'k' });

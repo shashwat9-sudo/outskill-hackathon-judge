@@ -143,7 +143,10 @@ interface StorageObjectRow {
 
 interface StorageBucketApi {
   createSignedUrl(path: string, expiresIn: number): Promise<{ data: { signedUrl: string } | null; error: { message: string } | null }>;
-  createSignedUploadUrl(path: string): Promise<{ data: { signedUrl: string; token: string } | null; error: { message: string } | null }>;
+  createSignedUploadUrl(
+    path: string,
+    options?: { upsert?: boolean },
+  ): Promise<{ data: { signedUrl: string; token: string } | null; error: { message: string } | null }>;
   upload(path: string, body: Uint8Array, options: { contentType: string; upsert: boolean }): Promise<{ error: { message: string } | null }>;
   remove(paths: string[]): Promise<{ error: { message: string } | null }>;
   list(
@@ -190,7 +193,22 @@ export async function createSupabaseStorage(
     createSignedDownloadUrl: signDownload,
 
     async createSignedUploadUrl(name, path) {
-      const { data, error } = await bucket(name).createSignedUploadUrl(path);
+      /*
+       * Upsert, because the destination is derived and a re-run lands on it again.
+       *
+       * Evidence paths are built from the cohort, submission, job and kind, so a
+       * retry — or a job judged a second time — produces exactly the path its
+       * previous attempt used. Supabase refuses to sign an upload for a path
+       * that already holds an object unless told otherwise, which turned the
+       * documented idempotency into a lie: the first run stored a trace and
+       * every run after it failed to authorise one, logging "could not
+       * authorise" while the older evidence sat there describing a different run.
+       *
+       * Overwriting is the correct outcome. The path belongs to one job, the
+       * worker had to hold that job's live lease to be issued the URL at all,
+       * and the confirmation still verifies what actually landed.
+       */
+      const { data, error } = await bucket(name).createSignedUploadUrl(path, { upsert: true });
       if (error || !data) {
         throw new StorageError(
           `Could not create an upload URL for ${name}/${path}: ${error?.message ?? 'no URL returned'}`,
