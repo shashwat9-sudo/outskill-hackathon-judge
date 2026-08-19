@@ -19,6 +19,7 @@ import {
   weightedScore,
   type AssessmentJob,
   type AssessmentStage,
+  type JudgingInput,
   type DataStore,
   type Env,
   type Logger,
@@ -164,7 +165,7 @@ export async function runStage(job: AssessmentJob, ctx: StageContext): Promise<S
 // --------------------------------------------------------------------------
 
 async function preflightStage(job: AssessmentJob, ctx: StageContext): Promise<StageOutcome> {
-  const detail = await ctx.store.submissions.getSubmissionDetail(job.submissionId);
+  const detail = await ctx.store.assessment.getJudgingInput(job.submissionId);
   if (!detail) return { stage: 'failed', error: 'Submission not found.' };
 
   const deck = detail.artifacts.find((a) => a.kind === 'deck_pdf');
@@ -225,7 +226,7 @@ async function preflightStage(job: AssessmentJob, ctx: StageContext): Promise<St
 // --------------------------------------------------------------------------
 
 async function artifactAnalysisStage(job: AssessmentJob, ctx: StageContext): Promise<StageOutcome> {
-  const detail = await ctx.store.submissions.getSubmissionDetail(job.submissionId);
+  const detail = await ctx.store.assessment.getJudgingInput(job.submissionId);
   if (!detail) return { stage: 'failed', error: 'Submission not found.' };
 
   const anonId = anonymiseSubmissionId(job.submissionId, detail.cohort.id);
@@ -330,7 +331,7 @@ async function artifactAnalysisStage(job: AssessmentJob, ctx: StageContext): Pro
 // --------------------------------------------------------------------------
 
 async function testPlanStage(job: AssessmentJob, ctx: StageContext): Promise<StageOutcome> {
-  const detail = await ctx.store.submissions.getSubmissionDetail(job.submissionId);
+  const detail = await ctx.store.assessment.getJudgingInput(job.submissionId);
   if (!detail?.submission.productUrl) return { stage: 'failed', error: 'No product URL.' };
 
   const anonId = anonymiseSubmissionId(job.submissionId, detail.cohort.id);
@@ -395,7 +396,7 @@ async function testPlanStage(job: AssessmentJob, ctx: StageContext): Promise<Sta
 // --------------------------------------------------------------------------
 
 async function browserTestingStage(job: AssessmentJob, ctx: StageContext): Promise<StageOutcome> {
-  const detail = await ctx.store.submissions.getSubmissionDetail(job.submissionId);
+  const detail = await ctx.store.assessment.getJudgingInput(job.submissionId);
   const plan = await ctx.store.assessment.getTestPlan(job.id);
   if (!detail?.submission.productUrl || !plan) {
     return { stage: 'failed', error: 'Missing product URL or test plan.' };
@@ -668,7 +669,7 @@ async function uploadRunEvidence(
 // --------------------------------------------------------------------------
 
 async function scoringStage(job: AssessmentJob, ctx: StageContext): Promise<StageOutcome> {
-  const detail = await ctx.store.submissions.getSubmissionDetail(job.submissionId);
+  const detail = await ctx.store.assessment.getJudgingInput(job.submissionId);
   if (!detail) return { stage: 'failed', error: 'Submission not found.' };
 
   const anonId = anonymiseSubmissionId(job.submissionId, detail.cohort.id);
@@ -850,7 +851,7 @@ async function scoringStage(job: AssessmentJob, ctx: StageContext): Promise<Stag
 async function generateFeedback(
   job: AssessmentJob,
   ctx: StageContext,
-  detail: NonNullable<Awaited<ReturnType<DataStore['submissions']['getSubmissionDetail']>>>,
+  detail: JudgingInput,
   browserEvidence: string,
   bugs: { description: string; severity: string; evidence: string }[],
 ): Promise<void> {
@@ -906,7 +907,7 @@ async function generateFeedback(
 async function consistencyStage(job: AssessmentJob, ctx: StageContext): Promise<StageOutcome> {
   const scores = await ctx.store.assessment.listScores(job.id);
   const evidence = await ctx.store.assessment.listEvidence(job.id);
-  const detail = await ctx.store.submissions.getSubmissionDetail(job.submissionId);
+  const detail = await ctx.store.assessment.getJudgingInput(job.submissionId);
   if (!detail || scores.length === 0) return { stage: 'completed' };
 
   const response = await ctx.ai.run({
@@ -958,7 +959,7 @@ async function consistencyStage(job: AssessmentJob, ctx: StageContext): Promise<
 // --------------------------------------------------------------------------
 
 function buildWrittenSubmission(
-  detail: NonNullable<Awaited<ReturnType<DataStore['submissions']['getSubmissionDetail']>>>,
+  detail: JudgingInput,
 ): string {
   const s = detail.submission;
   return [

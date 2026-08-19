@@ -168,7 +168,7 @@ describe('learner work', () => {
     }
   });
 
-  it('cannot read team invites or participant events', async () => {
+  it('cannot read team invites, participant events or resource documents', async () => {
     for (const table of ['team_invites', 'submission_events', 'resource_documents']) {
       await expect(
         asWorker(() => db.query(`select * from ${table} limit 1`)),
@@ -197,11 +197,28 @@ describe('the assessment output the worker owns', () => {
     }
   });
 
-  it('can append to the audit log but not read it back', async () => {
-    // Append-only: a worker that could read the audit log could see admin
-    // activity, and one that could edit it could cover its own tracks.
+  it('can append to the audit log but never read one back', async () => {
+    /*
+     * Append-only, and denied outright rather than merely empty.
+     *
+     * These were briefly granted at SELECT while the worker still used the admin
+     * submission read, which touched both tables. It now uses `getJudgingInput`,
+     * which does not, so the grants are gone: a query that cannot run is a
+     * stronger guarantee than a policy that happens to return nothing.
+     */
     await expect(asWorker(() => db.query(`select * from audit_logs limit 1`))).rejects.toThrow(denied);
     await expect(asWorker(() => db.query(`update audit_logs set action = 'x'`))).rejects.toThrow(denied);
+    await expect(
+      asWorker(() => db.query(`select * from submission_events limit 1`)),
+    ).rejects.toThrow(denied);
+
+    // Writing its own entry is still allowed — that is the whole point.
+    await expect(
+      asWorker(() =>
+        db.query(`insert into audit_logs (actor_type, action, entity_type)
+                  select 'worker', 'probe', 'submission' where false`),
+      ),
+    ).resolves.toBeDefined();
   });
 });
 

@@ -2140,6 +2140,37 @@ export class MemoryDataStore implements DataStore {
         return { bucket, storagePath: path, ...owner };
       },
 
+      /*
+       * The worker's own read, in memory.
+       *
+       * Same fields as production and, more importantly, the same absences: no
+       * rank, no shortlist, no audit trail. Demo mode must not be able to show
+       * the pipeline something the real one cannot see.
+       */
+      getJudgingInput: async (submissionId) => {
+        await this.ready;
+        const submission = this.db.submissions.find((s) => s.id === submissionId);
+        if (!submission) return null;
+
+        const team = this.db.teams.find((t) => t.id === submission.teamId);
+        const cohort = this.db.cohorts.find((c) => c.id === submission.cohortId);
+        if (!team || !cohort) return null;
+
+        const job = this.db.jobs.find((j: AssessmentJob) => j.submissionId === submissionId);
+
+        return clone({
+          submission,
+          team,
+          members: this.db.teamMembers.filter((m) => m.teamId === team.id),
+          cohort,
+          idea: this.db.ideas.find((i: CohortIdea) => i.id === submission.ideaId) ?? null,
+          artifacts: this.db.artifacts.filter((a) => a.submissionId === submissionId),
+          artifactAnalysis: job
+            ? (this.db.artifactAnalyses.find((a) => a.jobId === job.id) ?? null)
+            : null,
+        });
+      },
+
       getQueueStats: async (cohortId) => this.computeQueueStats(cohortId),
     };
   }

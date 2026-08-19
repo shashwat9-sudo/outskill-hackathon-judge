@@ -705,3 +705,28 @@ export interface AdminSubmissionDetail {
   rank: number | null;
   inShortlist: boolean;
 }
+
+/**
+ * What the judging pipeline is given, and the boundary of what it can see.
+ *
+ * Deliberately not `AdminSubmissionDetail`. That type carries the participant
+ * event timeline, the audit trail, manual review flags, feedback reports and —
+ * the part that matters — `rank` and `inShortlist`, read from the ranking
+ * tables. The worker must never see any of it: the system ranks privately and
+ * Outskill humans choose the Final Four (ADR-018), and a judging process that
+ * cannot read the ranking cannot be influenced by it.
+ *
+ * Every field here is one the pipeline actually dereferences. Adding to this
+ * type is how a new judging input gets introduced — visibly, and with the
+ * matching database grant — rather than arriving free with an admin view.
+ */
+export interface JudgingInput {
+  submission: Submission;
+  team: Team;
+  members: TeamMember[];
+  cohort: Cohort;
+  idea: CohortIdea | null;
+  artifacts: SubmissionArtifact[];
+  /** The previous stage's analysis of the deck and written answers, if it ran. */
+  artifactAnalysis: ArtifactAnalysis | null;
+}

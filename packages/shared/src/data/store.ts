@@ -50,6 +50,7 @@ import type {
 } from './types';
 import type { AssessmentStage, CohortStatus, SubmissionStatus } from '../domain/status';
 import type { EvidenceStore } from './postgres/repositories/evidence';
+import type { JudgingInputStore } from './postgres/repositories/judging-input';
 import type { CohortDependencies } from '../domain/cohort-deletion';
 import type { TeamActivityKind } from '../domain/concurrency';
 
@@ -509,7 +510,7 @@ export interface SubmissionListItem {
   disqualificationStatus: 'none' | 'proposed' | 'confirmed' | 'reversed';
 }
 
-export interface AssessmentStore extends EvidenceStore {
+export interface AssessmentStore extends EvidenceStore, JudgingInputStore {
   /** Queue every eligible submission in a cohort. Idempotent. */
   enqueueCohort(cohortId: string): Promise<{ queued: number; skipped: number }>;
   enqueueSubmission(submissionId: string): Promise<AssessmentJob>;

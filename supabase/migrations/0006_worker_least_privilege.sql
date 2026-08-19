@@ -127,8 +127,17 @@ grant insert on audit_logs to ohj_worker;
 --   admin_account, admin_sessions
 --       Password hashes and live session tokens. Nothing in judging needs them.
 --
---   team_invites, submission_events, resource_documents
+--   team_invites, resource_documents, submission_events
 --       Participant-facing records the worker has no business in.
+--
+--   audit_logs
+--       Append-only. The worker writes its own entries and cannot read any
+--       back, so it can neither watch admin activity nor revise its own trail.
+--
+-- These were briefly granted at SELECT while the worker still called the admin
+-- submission read, which touched them. It now uses `getJudgingInput`, which
+-- does not, so the grants are gone again — the query not existing is a stronger
+-- guarantee than a policy returning no rows.
 
 --   team_access_codes, participant_sessions
 --       Argon2id access-code hashes and live participant sessions. Never
@@ -137,8 +146,13 @@ grant insert on audit_logs to ohj_worker;
 revoke all on
   ranking_snapshots, ranking_entries, final_selections,
   admin_account, admin_sessions, team_invites, submission_events,
-  resource_documents, team_access_codes, participant_sessions
+  resource_documents, team_access_codes, participant_sessions,
+  submission_events
 from ohj_worker;
+
+-- audit_logs keeps its INSERT and nothing else: revoking wholesale here would
+-- undo the append grant above.
+revoke select, update, delete, truncate, references, trigger on audit_logs from ohj_worker;
 
 -- Future tables are not granted by default. A new table is unreachable by the
 -- worker until somebody writes the grant, which is the direction the mistake
