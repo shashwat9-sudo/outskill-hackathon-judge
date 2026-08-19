@@ -49,6 +49,8 @@ export interface PartnerSubmissionInput {
 
 export interface PartnerIngestResult {
   ok: boolean;
+  /** Set when the failure is specifically an unmapped cohort. */
+  unknownCohort?: boolean;
   /** The Judge's own identifier, stable across retries. */
   submissionId?: string;
   status?: string;
@@ -60,7 +62,15 @@ export interface PartnerIngestResult {
 export interface PartnerCategoryResult {
   key: string;
   title: string;
-  score: number;
+  /**
+   * Null until this category has actually been assessed.
+   *
+   * Zero is a real mark meaning "we looked, and it earned nothing". Using it
+   * for "not looked at yet" would make a queued submission indistinguishable
+   * from one that failed everything — and the team reading it would have no way
+   * to tell which had happened to them.
+   */
+  score: number | null;
   maxPoints: number;
   reasoning: string;
   confidence: number | null;
@@ -82,9 +92,51 @@ export interface PartnerResult {
   error?: string;
 }
 
+export interface PartnerCohortInput {
+  /** The internal product's own identifier, e.g. "AIAP-C13". */
+  externalCohortId: string;
+  name: string;
+  /** Short code used in receipts and admin views. Defaults to the external id. */
+  code?: string;
+  day12StartAt?: string | null;
+  day13DeadlineAt?: string | null;
+  shortlistTarget?: number | null;
+}
+
+export interface PartnerCohortResult {
+  ok: boolean;
+  /** The Judge cohort uuid this external id maps to, forever. */
+  cohortId?: string;
+  externalCohortId?: string;
+  created?: boolean;
+  error?: string;
+}
+
 export interface PartnerStore {
+  /**
+   * Declare a cohort, once, before its submissions arrive.
+   *
+   * Chosen over letting the first submission create one implicitly. A cohort
+   * decides which ranking a team competes in and which Top 10 they can reach,
+   * so it should come into existence deliberately — a mistyped identifier
+   * should fail at the door, not quietly open a second competition with one
+   * entrant in it. It also carries dates, a rubric and a shortlist target that
+   * no submission payload contains.
+   *
+   * Idempotent on `externalCohortId`: calling it every deploy is fine, and the
+   * mapping to a Judge uuid never moves once established.
+   */
+  syncCohort(input: PartnerCohortInput): Promise<PartnerCohortResult>;
+
   ingestSubmission(input: PartnerSubmissionInput): Promise<PartnerIngestResult>;
-  getPartnerResult(externalSubmissionId: string): Promise<PartnerResult>;
+  /**
+   * A result is addressed by cohort and submission together.
+   *
+   * The same identifier can legitimately exist in two cohorts, so reading one
+   * without saying which cohort would be ambiguous — and ambiguity here means
+   * showing a team another cohort's score.
+   */
+  getPartnerResult(externalCohortId: string, externalSubmissionId: string): Promise<PartnerResult>;
 }
 
 /** Stages that mean judging has not finished yet. */
@@ -103,6 +155,85 @@ export function buildPartnerStore(
   deps: { credentialKey: string; credentialKeyVersion: number },
 ): PartnerStore {
   return {
+    async syncCohort(input) {
+      if (!input.externalCohortId || !input.name) {
+        return { ok: false, error: 'externalCohortId and name are required.' };
+      }
+
+      return db.transaction(async (tx) => {
+        const { rows: existing } = await tx.query<{ id: string }>(
+          'select id from cohorts where external_cohort_id = $1',
+          [input.externalCohortId],
+        );
+        if (existing[0]) {
+          /*
+           * Already mapped, and the mapping does not move.
+           *
+           * Re-pointing an external id at a different Judge cohort would strand
+           * every submission already judged under it and change which ranking a
+           * team is in. Names and dates may be refreshed; the identity may not.
+           */
+          await tx.query(
+            `update cohorts
+                set name = $2,
+                    day12_start_at = coalesce($3, day12_start_at),
+                    day13_deadline_at = coalesce($4, day13_deadline_at),
+                    shortlist_target = coalesce($5, shortlist_target),
+                    updated_at = now()
+              where id = $1`,
+            [
+              existing[0].id,
+              input.name,
+              input.day12StartAt ? new Date(input.day12StartAt) : null,
+              input.day13DeadlineAt ? new Date(input.day13DeadlineAt) : null,
+              input.shortlistTarget ?? null,
+            ],
+          );
+          return {
+            ok: true,
+            cohortId: existing[0].id,
+            externalCohortId: input.externalCohortId,
+            created: false,
+          };
+        }
+
+        const { rows: rubric } = await tx.query<{ id: string }>(
+          'select id from rubric_versions where is_active order by created_at desc limit 1',
+        );
+        if (!rubric[0]) {
+          return { ok: false, error: 'No active rubric version. Bootstrap the rubric first.' };
+        }
+
+        const code = (input.code ?? input.externalCohortId).slice(0, 32);
+        const { rows } = await tx.query<{ id: string }>(
+          `insert into cohorts
+             (name, code, external_cohort_id, day12_start_at, day13_deadline_at,
+              shortlist_target, rubric_version_id, status)
+           values ($1,$2,$3,
+                   coalesce($4, now()),
+                   coalesce($5, now() + interval '2 days'),
+                   coalesce($6, 10), $7, 'closed')
+           returning id`,
+          [
+            input.name,
+            code,
+            input.externalCohortId,
+            input.day12StartAt ? new Date(input.day12StartAt) : null,
+            input.day13DeadlineAt ? new Date(input.day13DeadlineAt) : null,
+            input.shortlistTarget ?? null,
+            rubric[0].id,
+          ],
+        );
+
+        return {
+          ok: true,
+          cohortId: rows[0]!.id,
+          externalCohortId: input.externalCohortId,
+          created: true,
+        };
+      });
+    },
+
     async ingestSubmission(input) {
       if (!input.externalSubmissionId || !input.externalCohortId) {
         return { ok: false, error: 'externalCohortId and externalSubmissionId are required.' };
@@ -121,8 +252,11 @@ export function buildPartnerStore(
          * the caller a truthful `duplicate` flag.
          */
         const { rows: existing } = await tx.query<{ id: string; status: string }>(
-          'select id, status from submissions where external_submission_id = $1',
-          [input.externalSubmissionId],
+          `select id, status from submissions
+            where source = 'outskill_hackathon'
+              and external_cohort_id = $1
+              and external_submission_id = $2`,
+          [input.externalCohortId, input.externalSubmissionId],
         );
         if (existing[0]) {
           return {
@@ -133,13 +267,27 @@ export function buildPartnerStore(
           };
         }
 
+        /*
+         * The cohort must already have been synced.
+         *
+         * Creating one here from whatever string arrived would mean a typo in
+         * the caller's configuration silently producing a second, empty cohort
+         * — and submissions quietly competing in a ranking of one. A cohort
+         * also needs dates, a rubric and a shortlist target that a submission
+         * does not carry. So it is declared once, deliberately, through
+         * `syncCohort`, and an unknown identifier fails loudly here.
+         */
         const { rows: cohortRows } = await tx.query<{ id: string }>(
-          'select id from cohorts where code = $1 or id::text = $1',
+          'select id from cohorts where external_cohort_id = $1',
           [input.externalCohortId],
         );
         const cohortId = cohortRows[0]?.id;
         if (!cohortId) {
-          return { ok: false, error: `No cohort matches "${input.externalCohortId}".` };
+          return {
+            ok: false,
+            unknownCohort: true,
+            error: `No Judge cohort is mapped to "${input.externalCohortId}". Sync it first via POST /api/partner/cohorts.`,
+          };
         }
 
         /*
@@ -249,7 +397,7 @@ export function buildPartnerStore(
       });
     },
 
-    async getPartnerResult(externalSubmissionId) {
+    async getPartnerResult(externalCohortId, externalSubmissionId) {
       const { rows } = await db.query<{
         submission_id: string;
         cohort_id: string;
@@ -263,8 +411,10 @@ export function buildPartnerStore(
            from submissions s
            left join assessment_jobs j on j.submission_id = s.id
            left join assessment_summaries sum on sum.job_id = j.id
-          where s.external_submission_id = $1`,
-        [externalSubmissionId],
+          where s.source = 'outskill_hackathon'
+            and s.external_cohort_id = $1
+            and s.external_submission_id = $2`,
+        [externalCohortId, externalSubmissionId],
       );
 
       const row = rows[0];
@@ -324,7 +474,8 @@ export function buildPartnerStore(
         return {
           key: category.key,
           title: category.title,
-          score: scored ? Number(scored.raw_score) : 0,
+          // Null means unassessed; a scored zero stays zero.
+          score: scored ? Number(scored.raw_score) : null,
           maxPoints: category.maxPoints,
           reasoning: scored?.rationale ?? '',
           confidence: scored ? Number(scored.confidence) : null,
