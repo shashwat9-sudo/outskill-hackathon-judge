@@ -107,13 +107,13 @@ describe('the rubric this all feeds', () => {
       RUBRIC_CATEGORIES.map((category) => [category.key, category.maxPoints]),
     ).toEqual([
       ['problem_clarity', 15],
+      ['solution_usefulness', 15],
       ['core_workflow', 25],
-      ['stability', 15],
+      ['ease_of_use', 10],
       ['ai_usefulness', 15],
-      ['learning_execution', 10],
-      ['ux_accessibility', 10],
-      ['practical_potential', 5],
+      ['two_day_execution', 10],
       ['deck_demo', 5],
+      ['practical_potential', 5],
     ]);
   });
 

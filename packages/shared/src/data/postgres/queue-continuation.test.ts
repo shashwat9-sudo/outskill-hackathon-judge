@@ -45,7 +45,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await db.truncateAll();
   await db.query(
-    `insert into rubric_versions (version, name, is_active) values ('rubric-v1', 'Test', true)`,
+    `insert into rubric_versions (version, name, is_active) values ('rubric-v2', 'Test', true)`,
   );
   const seeded = await seedCohortWithSubmissions(db, 1);
   cohortId = seeded.cohort.id;

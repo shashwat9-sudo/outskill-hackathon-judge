@@ -7,19 +7,45 @@
  *
  * `publicDescription` is shown to participants. `privateGuidance` never leaves
  * the server and never appears in a participant response.
+ *
+ * WHO IS BEING JUDGED, AND WHO IS NOT
+ *
+ * These are beginner and non-technical builders who had two days. This is not
+ * an engineering competition, and v2 exists because v1 read like one: it scored
+ * "stability, data and technical completeness" and asked for technical
+ * explanations that these teams have no way to give and no reason to.
+ *
+ * So nothing here rewards framework choice, architecture, database design,
+ * production hardening, code quality or edge-case coverage. A team that shipped
+ * something genuinely useful on Bubble beats a team with an elegant empty repo,
+ * every time.
+ *
+ * The single heaviest category is whether the main thing the product promises
+ * actually works when a normal person tries it. That is 25 of the 100 points,
+ * and it is deliberately the only place where failure hurts a lot. Rough edges,
+ * unpolished layouts and missing extras cost a few points in their own
+ * categories and nothing more — the difference between "this is unfinished" and
+ * "this does not work" is the difference this rubric is built to draw.
  */
 
-export const RUBRIC_VERSION = 'rubric-v1' as const;
+/**
+ * v2 — rebuilt for the two-day beginner hackathon.
+ *
+ * Scores from v1 are not comparable: the categories carry different meanings
+ * and one of them measures something else entirely. The version is part of
+ * every stored score so an old assessment can still be read as what it was.
+ */
+export const RUBRIC_VERSION = 'rubric-v2' as const;
 
 export const RUBRIC_CATEGORY_KEYS = [
   'problem_clarity',
+  'solution_usefulness',
   'core_workflow',
-  'stability',
+  'ease_of_use',
   'ai_usefulness',
-  'learning_execution',
-  'ux_accessibility',
-  'practical_potential',
+  'two_day_execution',
   'deck_demo',
+  'practical_potential',
 ] as const;
 
 export type RubricCategoryKey = (typeof RUBRIC_CATEGORY_KEYS)[number];
@@ -51,96 +77,93 @@ export type EvidenceSource =
   | 'video'
   | 'preflight';
 
-export const RUBRIC_CATEGORIES: readonly RubricCategory[] = [
+export const RUBRIC_CATEGORIES = [
   {
     key: 'problem_clarity',
-    title: 'Problem and target-user clarity',
+    title: 'Problem and user clarity',
     maxPoints: 15,
     displayOrder: 1,
     publicDescription:
-      'How clearly the submission identifies a specific target user, the exact recurring problem they face, and a single understandable product promise.',
+      'How clearly you describe who the product is for and what problem it solves for them.',
     privateGuidance:
-      'Reward a named, specific user and a concrete recurring pain. A generic audience ("everyone", "users") caps this category. The one-sentence promise should be checkable against what the product actually does — a promise contradicted by the live product is contradictory evidence, not a clarity failure.',
+      'Reward a specific person and a specific problem, in whatever words the team found. "Busy parents who forget what is in the fridge" is excellent; "everyone" or "users" is not. Do not require market sizing, personas or research — they had two days. Judge the clarity of the thinking, not the vocabulary used to express it: a plainly written answer from a non-technical builder is a strong answer, not a weak one.',
     evidenceSources: ['written', 'deck', 'browser_step', 'screenshot'],
   },
   {
-    key: 'core_workflow',
-    title: 'Core workflow functionality',
-    maxPoints: 25,
+    key: 'solution_usefulness',
+    title: 'Solution usefulness',
+    maxPoints: 15,
     displayOrder: 2,
     publicDescription:
-      'Whether the single must-have workflow the team committed to actually works end to end in the live product.',
+      'Whether the thing you built would actually help the person you built it for.',
     privateGuidance:
-      'The heaviest category, and the one most driven by observed browser evidence. Score against the team-declared must-have workflow, not against an idealised version of the product. A workflow that completes end to end at least twice scores in the top band. Partial completion, dead ends, or a flow that only works on the exact declared happy path scores in the middle bands. Deck claims never substitute for an observed run.',
-    evidenceSources: ['browser_step', 'screenshot', 'network', 'preflight'],
+      'Ask one question: if the described user opened this, would it help them? A simple product that genuinely solves the stated problem scores high. An ambitious product that solves nothing in particular scores low, however impressive it looks. This is about fit between problem and solution — not scope, not effort, and explicitly not technical sophistication. A well-chosen small idea is the point of a two-day build, not a shortfall.',
+    evidenceSources: ['written', 'browser_step', 'screenshot', 'deck'],
   },
   {
-    key: 'stability',
-    title: 'Stability, data and technical completeness',
-    maxPoints: 15,
+    key: 'core_workflow',
+    title: 'Working core experience',
+    maxPoints: 25,
     displayOrder: 3,
     publicDescription:
-      'Whether the product is stable, stores data correctly, and behaves consistently across reloads and sessions.',
+      'Whether the main thing your product promises actually works when someone tries it.',
     privateGuidance:
-      'Directly mirrors the stability bar teams were taught: the core flow runs twice in a row, no dead buttons or dead-end screens, CRUD works on main entities, data persists after reload. Console errors and failed network calls are evidence here. Distinguish a product defect from a third-party outage — an outage is not a stability failure.',
-    evidenceSources: ['browser_step', 'console', 'network', 'screenshot'],
+      'The heaviest category, and the one place where failure should hurt. The team told us the main thing a user should be able to do; the browser run tried it. Did it work? Score on that primary path only. A product where the main action completes end to end scores high even if everything around it is rough. A product where the main action cannot be completed scores low even if the rest is polished — that is the distinction this rubric exists to make. Do not deduct here for visual roughness, missing secondary features, slow responses or unhandled edge cases; those belong to other categories or nowhere. If the browser could not reach the product at all, or the supplied login did not work, this is not a zero — it is a manual review, because we failed to observe rather than the team failing to build.',
+    evidenceSources: ['browser_step', 'screenshot', 'console', 'network', 'preflight'],
+  },
+  {
+    key: 'ease_of_use',
+    title: 'Ease of use',
+    maxPoints: 10,
+    displayOrder: 4,
+    publicDescription:
+      'Whether a first-time user can find their way around without being told what to do.',
+    privateGuidance:
+      'Judge from the position of someone opening this for the first time with no explanation. Is it obvious what to do first? Do the buttons say what they do? Did anything mislead the browser run into a dead end? Rough styling is not a defect here. Unlabelled controls, invisible next steps and dead ends are. Ten points is a small share of the total on purpose: a beginner team should not be punished for design skills they were never asked to have.',
+    evidenceSources: ['browser_step', 'screenshot', 'a11y'],
   },
   {
     key: 'ai_usefulness',
-    title: 'AI usefulness and differentiation',
+    title: 'AI usefulness',
     maxPoints: 15,
-    displayOrder: 4,
-    publicDescription:
-      'Whether AI materially improves the product outcome, rather than being a decorative or generic addition.',
-    privateGuidance:
-      'Ask whether the AI feature changes the user outcome and uses product context. A generic chatbot bolted onto an unrelated product scores low regardless of how well it works. Reward handled AI-failure states. An AI feature that could not be exercised is missing evidence, not a zero.',
-    evidenceSources: ['browser_step', 'screenshot', 'written', 'network'],
-  },
-  {
-    key: 'learning_execution',
-    title: 'Learning and execution quality',
-    maxPoints: 10,
     displayOrder: 5,
     publicDescription:
-      'The quality of the team’s reflection: bugs they found and fixed, trade-offs they made, and what changed between Day 12 and Day 13.',
+      'Whether AI makes your product genuinely more useful to the person using it.',
     privateGuidance:
-      'Scored from the written learning evidence, corroborated where possible against the product. Specific, concrete bugs and a real trade-off with a stated cost score well. Vague or template-sounding answers score low. Do not reward volume — reward specificity.',
-    evidenceSources: ['written', 'browser_step'],
+      'The team answered how AI helps their user. Check that answer against the product. Reward AI that does something the user actually benefits from — saving them work, producing something they could not easily make themselves, or making a decision easier. Do not reward AI that is present because it was expected: a chatbot bolted onto a form is not usefulness. Equally, do not demand technical explanation of models or prompts. What matters is whether the user is better off, which is visible in the product and in their answer. If the product plainly uses no AI, this category is low. That is a scoring outcome, not a disqualification.',
+    evidenceSources: ['written', 'browser_step', 'screenshot', 'deck'],
   },
   {
-    key: 'ux_accessibility',
-    title: 'UX and accessibility',
+    key: 'two_day_execution',
+    title: 'Two-day execution',
     maxPoints: 10,
     displayOrder: 6,
-    publicDescription:
-      'Clarity of the interface, quality of empty/loading/error states, mobile behaviour, and basic accessibility.',
+    publicDescription: 'How much of a real product you got working in the two days you had.',
     privateGuidance:
-      'Combine the axe scan, keyboard traversal, mobile smoke test, and observed state handling. Weight serious and critical axe violations above minor ones. Aesthetic preference is not a scoring input; usability and accessibility are.',
-    evidenceSources: ['a11y', 'browser_step', 'screenshot'],
-  },
-  {
-    key: 'practical_potential',
-    title: 'Practical or commercial potential',
-    maxPoints: 5,
-    displayOrder: 7,
-    publicDescription:
-      'Whether the product has a credible path to repeated use and real-world adoption.',
-    privateGuidance:
-      'Low weight by design — judgement here is inherently speculative. Reward a plausible repeat-use reason and an identifiable audience. Never promise or predict commercial success, and never let this category compensate for a product that does not work.',
-    evidenceSources: ['written', 'deck', 'browser_step'],
+      'How much genuinely working product exists, judged against two days and a beginner starting point. Reward teams who chose a scope they could finish and finished it. A narrow product that works is better execution than a broad one that does not. This is not a measure of hours worked, commit counts or feature counts, none of which we can see or should infer. It is what is standing at the end.',
+    evidenceSources: ['browser_step', 'screenshot', 'written', 'deck'],
   },
   {
     key: 'deck_demo',
-    title: 'Deck and demo clarity',
+    title: 'Demo and deck clarity',
+    maxPoints: 5,
+    displayOrder: 7,
+    publicDescription: 'Whether your demo and deck explain the product clearly.',
+    privateGuidance:
+      'Did the demo and deck make the product understandable? Production values are irrelevant — a clear phone recording beats a polished video that explains nothing. If a deck or Loom could not be opened, do not guess at its contents and do not score it as absent when it may simply be unreachable. Say so, and let the missing-evidence rule apply.',
+    evidenceSources: ['deck', 'video', 'written'],
+  },
+  {
+    key: 'practical_potential',
+    title: 'Practical potential',
     maxPoints: 5,
     displayOrder: 8,
-    publicDescription:
-      'Whether the pitch deck and demo video communicate the product clearly and accurately.',
+    publicDescription: 'Whether this could plausibly become something real with more time.',
     privateGuidance:
-      'Check the deck covers problem, product and demo, and that it is actually filled in — unedited template placeholder text is contradictory evidence. If the demo video could not be analysed, record missing evidence and lower confidence; never invent video content. A deck claiming features the product does not have is an accuracy problem, recorded here and as contradictory evidence in the affected category.',
-    evidenceSources: ['deck', 'video', 'screenshot'],
+      'Would this be worth continuing? Reward a real need and an idea with somewhere to go. Do not require a business model, revenue projections or market analysis — none of that was asked for, and inventing an opinion about it would be scoring something we did not observe.',
+    evidenceSources: ['written', 'deck', 'browser_step'],
   },
-] as const;
+] as const satisfies readonly RubricCategory[];
 
 export const RUBRIC_TOTAL_POINTS = 100 as const;
 

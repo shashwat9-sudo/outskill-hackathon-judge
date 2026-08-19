@@ -23,14 +23,60 @@ describe('rubric integrity', () => {
     const weights = Object.fromEntries(RUBRIC_CATEGORIES.map((c) => [c.key, c.maxPoints]));
     expect(weights).toEqual({
       problem_clarity: 15,
+      solution_usefulness: 15,
       core_workflow: 25,
-      stability: 15,
+      ease_of_use: 10,
       ai_usefulness: 15,
-      learning_execution: 10,
-      ux_accessibility: 10,
-      practical_potential: 5,
+      two_day_execution: 10,
       deck_demo: 5,
+      practical_potential: 5,
     });
+  });
+
+  it('puts the most weight on whether the product actually works', () => {
+    /*
+     * The shape of the whole rubric in one assertion.
+     *
+     * A beginner two-day build is judged on whether the main thing works, not
+     * on polish. `core_workflow` is therefore the single largest category, and
+     * the presentation categories together are worth less than half of it — so
+     * a beautiful deck cannot make up for a product that does nothing.
+     */
+    const points = Object.fromEntries(RUBRIC_CATEGORIES.map((c) => [c.key, c.maxPoints]));
+    const largest = [...RUBRIC_CATEGORIES].sort((a, b) => b.maxPoints - a.maxPoints)[0];
+
+    expect(largest!.key).toBe('core_workflow');
+    expect(points.deck_demo! + points.practical_potential!).toBeLessThan(points.core_workflow!);
+    expect(points.ease_of_use!).toBeLessThan(points.core_workflow!);
+  });
+
+  it('asks nothing of a team that a non-technical beginner could not answer', () => {
+    /*
+     * v1 scored "solution_usefulness, data and technical completeness" and asked for
+     * technical explanation. These builders had two days and, in many cases, no
+     * engineering background at all — so the guidance must not reach for
+     * architecture, code quality or infrastructure.
+     */
+    const guidance = RUBRIC_CATEGORIES.map((c) => c.privateGuidance.toLowerCase()).join(' ');
+    const publicText = RUBRIC_CATEGORIES.map((c) => c.publicDescription.toLowerCase()).join(' ');
+
+    for (const engineering of [
+      'architecture',
+      'code quality',
+      'database design',
+      'framework',
+      'test coverage',
+      'scalab',
+      'refactor',
+    ]) {
+      expect(publicText, engineering).not.toContain(engineering);
+    }
+
+    // The private guidance may name these — but only to tell the judge to
+    // ignore them.
+    for (const forbidden of ['schema design', 'unit test']) {
+      expect(guidance, forbidden).not.toContain(forbidden);
+    }
   });
 
   it('has exactly eight categories with unique keys and display orders', () => {

@@ -27,6 +27,7 @@ const SCHEMA_MIGRATIONS = [
   '0006_worker_least_privilege',
   '0007_cohort_synthetic_marker',
   '0008_browser_run_attempts',
+  '0009_partner_ingest',
 ] as const;
 
 /**

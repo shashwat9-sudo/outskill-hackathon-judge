@@ -197,7 +197,7 @@ export default async function ShortlistPage() {
                   {/* Category breakdown, so a rank is never just a number. */}
                   <div className="mt-4 grid grid-cols-2 gap-2 border-t border-brand-edge pt-3 sm:grid-cols-4">
                     {(
-                      ['core_workflow', 'stability', 'ai_usefulness', 'learning_execution'] as const
+                      ['core_workflow', 'solution_usefulness', 'ai_usefulness', 'two_day_execution'] as const
                     ).map((key) => {
                       const category = RUBRIC_CATEGORIES.find((c) => c.key === key);
                       const value = entry.entry.tiebreakVector[key] ?? 0;
@@ -262,7 +262,7 @@ export default async function ShortlistPage() {
               </tbody>
             </Table>
             <p className="mt-4 text-xs text-muted">
-              Ties break on core workflow, then stability, AI usefulness, learning and execution, then
+              Ties break on core workflow, then solution_usefulness, AI usefulness, learning and execution, then
               fewer unresolved risks. The tie-break chain is internal.
             </p>
           </Disclosure>

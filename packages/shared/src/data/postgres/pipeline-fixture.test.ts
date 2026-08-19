@@ -39,7 +39,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await db.truncateAll();
   await db.query(
-    `insert into rubric_versions (version, name, is_active) values ('rubric-v1', 'Test rubric', true)`,
+    `insert into rubric_versions (version, name, is_active) values ('rubric-v2', 'Test rubric', true)`,
   );
   const seeded = await seedCohortWithSubmissions(db, 12);
   cohort = seeded.cohort;
@@ -159,7 +159,7 @@ async function runFullPipeline(submission: Submission, total: number) {
   await assessment.advanceStage(job.id, 'evidence_review');
   await assessment.saveEvidence(job.id, [
     { categoryKey: 'core_workflow', evidenceType: 'browser_step', stance: 'supporting', summary: 'The declared flow completed.', sourceRef: { step: 2 }, confidence: 0.9 },
-    { categoryKey: 'ux_accessibility', evidenceType: 'a11y', stance: 'contradictory', summary: 'One serious accessibility violation.', sourceRef: { impact: 'serious' }, confidence: 0.8 },
+    { categoryKey: 'ease_of_use', evidenceType: 'a11y', stance: 'contradictory', summary: 'One serious accessibility violation.', sourceRef: { impact: 'serious' }, confidence: 0.8 },
     { categoryKey: 'deck_demo', evidenceType: 'video', stance: 'missing', summary: 'The demo video was not watched.', sourceRef: {}, confidence: 0.3 },
   ]);
 

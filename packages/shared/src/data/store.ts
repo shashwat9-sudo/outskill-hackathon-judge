@@ -51,6 +51,7 @@ import type {
 import type { AssessmentStage, CohortStatus, SubmissionStatus } from '../domain/status';
 import type { EvidenceStore } from './postgres/repositories/evidence';
 import type { JudgingInputStore } from './postgres/repositories/judging-input';
+import type { PartnerStore } from './postgres/repositories/partner';
 import type { CohortDependencies } from '../domain/cohort-deletion';
 import type { TeamActivityKind } from '../domain/concurrency';
 
@@ -677,6 +678,11 @@ export interface DataStore {
   resources: ResourceStore;
   audit: AuditStore;
   settings: SettingsStore;
+  /**
+   * Submissions arriving from the Outskill Hackathon product, and the results
+   * it reads back. Absent on the memory driver, which has no partner.
+   */
+  partner?: PartnerStore;
   /** Demo mode only — resets to the deterministic fixture state. */
   reset?(): Promise<void>;
 
@@ -721,3 +727,10 @@ export function asDemoStore(store: DataStore): DemoCapableStore | null {
   if (methods.some((method) => typeof store[method] !== 'function')) return null;
   return store as DemoCapableStore;
 }
+
+export type {
+  PartnerStore,
+  PartnerSubmissionInput,
+  PartnerIngestResult,
+  PartnerResult,
+} from './postgres/repositories/partner';

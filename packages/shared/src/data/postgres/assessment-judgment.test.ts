@@ -33,7 +33,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await db.truncateAll();
   await db.query(
-    `insert into rubric_versions (version, name, is_active) values ('rubric-v1', 'Test rubric', true)`,
+    `insert into rubric_versions (version, name, is_active) values ('rubric-v2', 'Test rubric', true)`,
   );
   const seeded = await seedCohortWithSubmissions(db, 3);
   cohort = seeded.cohort;
@@ -342,7 +342,7 @@ describe('evidence', () => {
 
   it('replaces on a re-run so counts do not double', async () => {
     const one = [
-      { categoryKey: 'stability' as const, evidenceType: 'network' as const, stance: 'supporting' as const, summary: 'No failures.', sourceRef: {}, confidence: 0.8 },
+      { categoryKey: 'solution_usefulness' as const, evidenceType: 'network' as const, stance: 'supporting' as const, summary: 'No failures.', sourceRef: {}, confidence: 0.8 },
     ];
     await assessment.saveEvidence(jobId, one);
     await assessment.saveEvidence(jobId, one);
@@ -351,7 +351,7 @@ describe('evidence', () => {
 
   it('clamps a confidence outside the permitted range', async () => {
     await assessment.saveEvidence(jobId, [
-      { categoryKey: 'stability', evidenceType: 'network', stance: 'supporting', summary: 'x', sourceRef: {}, confidence: 5 },
+      { categoryKey: 'solution_usefulness', evidenceType: 'network', stance: 'supporting', summary: 'x', sourceRef: {}, confidence: 5 },
     ]);
     expect((await assessment.listEvidence(jobId))[0]?.confidence).toBe(1);
   });

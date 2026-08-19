@@ -28,7 +28,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await db.truncateAll();
   await db.query(
-    `insert into rubric_versions (version, name, is_active) values ('rubric-v1', 'Test rubric', true)`,
+    `insert into rubric_versions (version, name, is_active) values ('rubric-v2', 'Test rubric', true)`,
   );
 });
 
@@ -56,7 +56,7 @@ async function makeCohort(code = 'IMPORT') {
     day13DeadlineAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
     shortlistTarget: 10,
     submissionInstructions: '',
-    rubricVersion: 'rubric-v1',
+    rubricVersion: 'rubric-v2',
     assessmentConfig: CONFIG,
     status: 'draft',
     closedAt: null,

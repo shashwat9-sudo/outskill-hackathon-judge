@@ -41,7 +41,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await db.truncateAll();
   await db.query(
-    `insert into rubric_versions (version, name, is_active) values ('rubric-v1', 'Test', true)`,
+    `insert into rubric_versions (version, name, is_active) values ('rubric-v2', 'Test', true)`,
   );
   const seeded = await seedCohortWithSubmissions(db, 1);
   cohortId = seeded.cohort.id;
@@ -80,7 +80,7 @@ describe('what judging is given', () => {
 
     // Cohort configuration the worker runs by.
     expect(input!.cohort.id).toBe(cohortId);
-    expect(input!.cohort.rubricVersion).toBe('rubric-v1');
+    expect(input!.cohort.rubricVersion).toBe('rubric-v2');
     expect(input!.cohort.assessmentConfig).toBeDefined();
     expect(input!.cohort.assessmentConfig.browserBudgetMs).toBeTypeOf('number');
     expect(input!.cohort.assessmentConfig.lowConfidenceThreshold).toBeTypeOf('number');
@@ -156,7 +156,7 @@ describe('what judging is not given', () => {
      */
     const { rows: snap } = await db.query<{ id: string }>(
       `insert into ranking_snapshots (cohort_id, is_current, rubric_version)
-       values ($1, true, 'rubric-v1') returning id`,
+       values ($1, true, 'rubric-v2') returning id`,
       [cohortId],
     );
     await db.query(

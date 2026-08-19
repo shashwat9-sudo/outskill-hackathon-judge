@@ -109,7 +109,7 @@ describeIfServer('two workers claiming at the same instant', () => {
     await store.query('truncate cohorts, rubric_versions restart identity cascade');
     await store.query(
       `insert into rubric_versions (version, name, is_active)
-       values ('rubric-v1', 'Test rubric', true)
+       values ('rubric-v2', 'Test rubric', true)
        on conflict (version) do nothing`,
     );
 

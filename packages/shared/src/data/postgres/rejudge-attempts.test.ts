@@ -42,7 +42,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await db.truncateAll();
   await db.query(
-    `insert into rubric_versions (version, name, is_active) values ('rubric-v1', 'Test', true)`,
+    `insert into rubric_versions (version, name, is_active) values ('rubric-v2', 'Test', true)`,
   );
   const seeded = await seedCohortWithSubmissions(db, 1);
   cohortId = seeded.cohort.id;
@@ -239,11 +239,11 @@ describe('scoring and ranking', () => {
     // cannot quietly change that.
     const scores = (attempt: number) =>
       Array.from({ length: 8 }, (_, i) => ({
-        categoryKey: ['problem_clarity','core_workflow','stability','ai_usefulness',
-          'learning_execution','ux_accessibility','practical_potential','deck_demo'][i]!,
+        categoryKey: ['problem_clarity','core_workflow','solution_usefulness','ai_usefulness',
+          'two_day_execution','ease_of_use','practical_potential','deck_demo'][i]!,
         rawScore: attempt, maxPoints: 10, weightedScore: attempt, confidence: 0.9,
         rationale: 'r', supportingEvidence: [], contradictoryEvidence: [], missingEvidence: [],
-        modelVersion: 'm', promptVersion: 'p', rubricVersion: 'rubric-v1',
+        modelVersion: 'm', promptVersion: 'p', rubricVersion: 'rubric-v2',
       }));
 
     await claim();

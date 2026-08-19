@@ -36,7 +36,7 @@ beforeEach(async () => {
 /** Cohorts need a rubric version to point at. */
 async function seedRubric(): Promise<void> {
   await db.query(
-    `insert into rubric_versions (version, name, is_active) values ('rubric-v1', 'Test rubric', true)`,
+    `insert into rubric_versions (version, name, is_active) values ('rubric-v2', 'Test rubric', true)`,
   );
 }
 
@@ -62,7 +62,7 @@ async function makeCohort(code = 'TEST') {
     day13DeadlineAt: new Date('2026-03-13T18:29:00Z'),
     shortlistTarget: 10,
     submissionInstructions: '',
-    rubricVersion: 'rubric-v1',
+    rubricVersion: 'rubric-v2',
     assessmentConfig: CONFIG,
     status: 'draft',
     closedAt: null,
@@ -206,7 +206,7 @@ describe('admin account', () => {
 describe('cohorts', () => {
   it('resolves the rubric version string rather than exposing the foreign key', async () => {
     const cohort = await makeCohort();
-    expect(cohort.rubricVersion).toBe('rubric-v1');
+    expect(cohort.rubricVersion).toBe('rubric-v2');
     expect(cohort).not.toHaveProperty('rubricVersionId');
   });
 

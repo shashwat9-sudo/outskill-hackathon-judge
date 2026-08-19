@@ -48,7 +48,7 @@ export async function makeCohort(db: SqlDatabase, code = 'ASSESS'): Promise<Coho
     day13DeadlineAt: new Date(now + DAY),
     shortlistTarget: 10,
     submissionInstructions: '',
-    rubricVersion: 'rubric-v1',
+    rubricVersion: 'rubric-v2',
     assessmentConfig: CONFIG,
     status: 'draft',
     closedAt: null,

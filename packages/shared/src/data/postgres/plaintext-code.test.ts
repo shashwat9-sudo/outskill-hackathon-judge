@@ -34,7 +34,7 @@ let cohortId: string;
 beforeEach(async () => {
   await db.truncateAll();
   await db.query(
-    `insert into rubric_versions (version, name, is_active) values ('rubric-v1', 'Test rubric', true)`,
+    `insert into rubric_versions (version, name, is_active) values ('rubric-v2', 'Test rubric', true)`,
   );
   const cohort = await makeCohort(db, 'PLAIN');
   cohortId = cohort.id;

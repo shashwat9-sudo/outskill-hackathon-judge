@@ -344,9 +344,9 @@ describe('tie-breaking', () => {
     expect(compareForRanking(a, b)).toBeLessThan(0);
   });
 
-  it('falls through core workflow to stability', () => {
-    const a = makeEntry('a', { core_workflow: 20, stability: 12, problem_clarity: 3 });
-    const b = makeEntry('b', { core_workflow: 20, stability: 8, problem_clarity: 7 });
+  it('falls through core workflow to solution_usefulness', () => {
+    const a = makeEntry('a', { core_workflow: 20, solution_usefulness: 12, problem_clarity: 3 });
+    const b = makeEntry('b', { core_workflow: 20, solution_usefulness: 8, problem_clarity: 7 });
     expect(compareForRanking(a, b)).toBeLessThan(0);
   });
 

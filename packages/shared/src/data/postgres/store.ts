@@ -20,6 +20,7 @@ import { buildSubmissionStore } from './repositories/submissions';
 import { buildTeamStore } from './repositories/teams';
 import { buildAuditStore, buildResourceStore, buildSettingsStore } from './repositories/support';
 import { buildAssessmentStore } from './repositories/assessment';
+import { buildPartnerStore } from './repositories/partner';
 import { buildRankingStore } from './repositories/ranking';
 import { createSupabaseStorage, type StorageAdapter } from './storage';
 import type { StoreCapabilities } from './unavailable';
@@ -93,6 +94,10 @@ export function composePostgresDataStore(
     resources: buildResourceStore(db, storage),
     audit: buildAuditStore(db),
     settings: buildSettingsStore(db),
+    partner: buildPartnerStore(db, {
+      credentialKey: config.credentialKey,
+      credentialKeyVersion: config.credentialKeyVersion,
+    }),
 
     assessment: buildAssessmentStore(db, storage),
     ranking: buildRankingStore(db),

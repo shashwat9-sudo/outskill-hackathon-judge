@@ -24,7 +24,7 @@ import { json } from './rows';
 export interface BootstrapInput {
   adminUsername: string;
   adminPassword: string;
-  /** Version string for the rubric, e.g. `rubric-v1`. */
+  /** Version string for the rubric, e.g. `rubric-v2`. */
   rubricVersion?: string;
 }
 

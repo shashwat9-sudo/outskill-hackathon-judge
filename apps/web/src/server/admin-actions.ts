@@ -139,7 +139,7 @@ export async function createCohortAction(formData: FormData): Promise<AdminActio
       closureType: null,
       acceptingUntil: null,
       submissionInstructions: String(formData.get('submissionInstructions') ?? ''),
-      rubricVersion: 'rubric-v1',
+      rubricVersion: 'rubric-v2',
       assessmentConfig: {
         workerConcurrency: env.WORKER_CONCURRENCY,
         browserBudgetMs: env.BROWSER_TEST_BUDGET_MS,
@@ -1310,9 +1310,9 @@ export async function runConsistencyPassAction(formData: FormData): Promise<Admi
     tiebreakVector: {
       total: e.entry.tiebreakVector.total ?? e.entry.totalScore,
       core_workflow: e.entry.tiebreakVector.core_workflow ?? 0,
-      stability: e.entry.tiebreakVector.stability ?? 0,
+      solution_usefulness: e.entry.tiebreakVector.solution_usefulness ?? 0,
       ai_usefulness: e.entry.tiebreakVector.ai_usefulness ?? 0,
-      learning_execution: e.entry.tiebreakVector.learning_execution ?? 0,
+      two_day_execution: e.entry.tiebreakVector.two_day_execution ?? 0,
       unresolvedRisks: e.entry.tiebreakVector.unresolvedRisks ?? 0,
     },
   }));

@@ -33,7 +33,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await db.truncateAll();
   await db.query(
-    `insert into rubric_versions (version, name, is_active) values ('rubric-v1', 'Test', true)`,
+    `insert into rubric_versions (version, name, is_active) values ('rubric-v2', 'Test', true)`,
   );
   participant = buildParticipantStore({
     db,
@@ -70,7 +70,7 @@ async function scenario() {
     day13DeadlineAt: new Date(Date.now() + 86_400_000),
     shortlistTarget: 10,
     submissionInstructions: '',
-    rubricVersion: 'rubric-v1',
+    rubricVersion: 'rubric-v2',
     assessmentConfig: CONFIG,
     status: 'draft',
     closedAt: null,

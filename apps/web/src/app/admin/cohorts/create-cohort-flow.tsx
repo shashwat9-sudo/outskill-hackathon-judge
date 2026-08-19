@@ -235,7 +235,7 @@ export function CreateCohortFlow({ csrfToken }: { csrfToken: string }) {
               <Alert tone="info" title="What this cohort inherits">
                 <ul className="mt-1 list-disc space-y-1 pl-4">
                   <li>Approved ideas are copied from your most recent cohort, and stay editable.</li>
-                  <li>Rubric version rubric-v1, frozen to this cohort.</li>
+                  <li>Rubric version rubric-v2, frozen to this cohort.</li>
                   <li>
                     The cohort starts in <strong>draft</strong> — participants cannot reach it until
                     you open submissions.

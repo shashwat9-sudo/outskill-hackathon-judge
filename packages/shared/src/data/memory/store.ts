@@ -2241,9 +2241,9 @@ export class MemoryDataStore implements DataStore {
             tiebreakVector: {
               total: totalScore(entry.scores),
               core_workflow: pick(entry, 'core_workflow'),
-              stability: pick(entry, 'stability'),
+              solution_usefulness: pick(entry, 'solution_usefulness'),
               ai_usefulness: pick(entry, 'ai_usefulness'),
-              learning_execution: pick(entry, 'learning_execution'),
+              two_day_execution: pick(entry, 'two_day_execution'),
               unresolvedRisks: entry.unresolvedRiskCount,
             },
             inShortlist: index < cohort.shortlistTarget,

@@ -96,6 +96,16 @@ export const envSchema = z.object({
    * against the job it names, and every path is derived server-side.
    */
   WORKER_API_TOKEN: z.string().optional(),
+  /**
+   * Service-to-service credential for the Outskill Hackathon product.
+   *
+   * Deliberately separate from WORKER_API_TOKEN. They authorise different
+   * callers doing different things — the worker uploads evidence for a job it
+   * holds, the Hackathon product submits work to be judged and reads results —
+   * and sharing one secret would mean a leak on either side handing over both
+   * capabilities, with no way to rotate one without breaking the other.
+   */
+  PARTNER_API_TOKEN: z.string().optional(),
   WORKER_ID: z.string().optional(),
   /** Where the worker serves /healthz and /readyz. Container-internal only. */
   WORKER_HEALTH_PORT: positiveInt(8080),

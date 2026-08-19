@@ -4,7 +4,7 @@
  * Tie-break order is fixed by the event rules:
  *   1. total score
  *   2. core workflow
- *   3. stability
+ *   3. solution_usefulness
  *   4. AI usefulness
  *   5. learning and execution
  *   6. fewer unresolved risks
@@ -28,14 +28,14 @@ import { totalScore, type CategoryScoreLike } from '../rubric/index';
  */
 export type TiebreakCategoryKey = Extract<
   RubricCategoryKey,
-  'core_workflow' | 'stability' | 'ai_usefulness' | 'learning_execution'
+  'core_workflow' | 'solution_usefulness' | 'ai_usefulness' | 'two_day_execution'
 >;
 
 export const TIEBREAK_CATEGORY_ORDER: readonly TiebreakCategoryKey[] = [
   'core_workflow',
-  'stability',
+  'solution_usefulness',
   'ai_usefulness',
-  'learning_execution',
+  'two_day_execution',
 ];
 
 export interface RankableSubmission {
@@ -59,9 +59,9 @@ export interface RankedEntry {
 export interface TiebreakVector {
   total: number;
   core_workflow: number;
-  stability: number;
+  solution_usefulness: number;
   ai_usefulness: number;
-  learning_execution: number;
+  two_day_execution: number;
   unresolvedRisks: number;
 }
 
@@ -73,9 +73,9 @@ export function buildTiebreakVector(entry: RankableSubmission): TiebreakVector {
   return {
     total: totalScore(entry.scores),
     core_workflow: categoryScore(entry.scores, 'core_workflow'),
-    stability: categoryScore(entry.scores, 'stability'),
+    solution_usefulness: categoryScore(entry.scores, 'solution_usefulness'),
     ai_usefulness: categoryScore(entry.scores, 'ai_usefulness'),
-    learning_execution: categoryScore(entry.scores, 'learning_execution'),
+    two_day_execution: categoryScore(entry.scores, 'two_day_execution'),
     unresolvedRisks: entry.unresolvedRiskCount,
   };
 }

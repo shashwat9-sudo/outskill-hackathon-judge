@@ -1099,9 +1099,9 @@ function seedRanking(db: MemoryDatabase, cohort: Cohort): void {
       tiebreakVector: {
         total: totalScore(scores),
         core_workflow: scores.find((s) => s.categoryKey === 'core_workflow')?.weightedScore ?? 0,
-        stability: scores.find((s) => s.categoryKey === 'stability')?.weightedScore ?? 0,
+        solution_usefulness: scores.find((s) => s.categoryKey === 'solution_usefulness')?.weightedScore ?? 0,
         ai_usefulness: scores.find((s) => s.categoryKey === 'ai_usefulness')?.weightedScore ?? 0,
-        learning_execution: scores.find((s) => s.categoryKey === 'learning_execution')?.weightedScore ?? 0,
+        two_day_execution: scores.find((s) => s.categoryKey === 'two_day_execution')?.weightedScore ?? 0,
         unresolvedRisks: entry.unresolvedRiskCount,
       },
       inShortlist: index < cohort.shortlistTarget,

@@ -87,7 +87,7 @@ async function main(): Promise<void> {
   // --- a real Postgres engine, real schema ---------------------------------
   const db = await createTestDatabase();
   await db.query(
-    `insert into rubric_versions (version, name, is_active) values ('rubric-v1', 'Phase 7', true)`,
+    `insert into rubric_versions (version, name, is_active) values ('rubric-v2', 'Phase 7', true)`,
   );
 
   const store = composePostgresDataStore(db, createInMemoryStorage(), {
@@ -105,7 +105,7 @@ async function main(): Promise<void> {
     day13DeadlineAt: new Date(Date.now() + 86_400_000),
     shortlistTarget: 10,
     submissionInstructions: '',
-    rubricVersion: 'rubric-v1',
+    rubricVersion: 'rubric-v2',
     assessmentConfig: {
       workerConcurrency: 1,
       browserBudgetMs: 240_000,

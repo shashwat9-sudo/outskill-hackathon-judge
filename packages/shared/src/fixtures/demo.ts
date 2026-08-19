@@ -287,30 +287,30 @@ const SCORE_PROFILES: Record<
   complete: {
     problem_clarity: { fraction: 0.87, confidence: 0.9 },
     core_workflow: { fraction: 0.92, confidence: 0.95 },
-    stability: { fraction: 0.87, confidence: 0.92 },
+    solution_usefulness: { fraction: 0.87, confidence: 0.92 },
     ai_usefulness: { fraction: 0.8, confidence: 0.85 },
-    learning_execution: { fraction: 0.85, confidence: 0.88 },
-    ux_accessibility: { fraction: 0.75, confidence: 0.9 },
+    two_day_execution: { fraction: 0.85, confidence: 0.88 },
+    ease_of_use: { fraction: 0.75, confidence: 0.9 },
     practical_potential: { fraction: 0.8, confidence: 0.7 },
     deck_demo: { fraction: 0.9, confidence: 0.85 },
   },
   login_required: {
     problem_clarity: { fraction: 0.73, confidence: 0.85 },
     core_workflow: { fraction: 0.72, confidence: 0.88 },
-    stability: { fraction: 0.67, confidence: 0.85 },
+    solution_usefulness: { fraction: 0.67, confidence: 0.85 },
     ai_usefulness: { fraction: 0.6, confidence: 0.8 },
-    learning_execution: { fraction: 0.7, confidence: 0.85 },
-    ux_accessibility: { fraction: 0.6, confidence: 0.88 },
+    two_day_execution: { fraction: 0.7, confidence: 0.85 },
+    ease_of_use: { fraction: 0.6, confidence: 0.88 },
     practical_potential: { fraction: 0.6, confidence: 0.7 },
     deck_demo: { fraction: 0.7, confidence: 0.8 },
   },
   low_confidence: {
     problem_clarity: { fraction: 0.6, confidence: 0.55 },
     core_workflow: { fraction: 0.52, confidence: 0.45 },
-    stability: { fraction: 0.53, confidence: 0.5 },
+    solution_usefulness: { fraction: 0.53, confidence: 0.5 },
     ai_usefulness: { fraction: 0.4, confidence: 0.35 },
-    learning_execution: { fraction: 0.6, confidence: 0.7 },
-    ux_accessibility: { fraction: 0.5, confidence: 0.6 },
+    two_day_execution: { fraction: 0.6, confidence: 0.7 },
+    ease_of_use: { fraction: 0.5, confidence: 0.6 },
     practical_potential: { fraction: 0.6, confidence: 0.5 },
     deck_demo: { fraction: 0.4, confidence: 0.3 },
   },
@@ -389,7 +389,7 @@ const SCORE_NARRATIVES: Partial<Record<DemoScenario, Partial<Record<RubricCatego
       contradictory: [],
       missing: [],
     },
-    stability: {
+    solution_usefulness: {
       rationale: 'Data persisted across reload and no console or network errors were recorded.',
       supporting: [
         'Persistence check after reload: created activity still present.',
@@ -409,7 +409,7 @@ const SCORE_NARRATIVES: Partial<Record<DemoScenario, Partial<Record<RubricCatego
       contradictory: [],
       missing: ['AI failure handling was not observable — no failure occurred during the run.'],
     },
-    learning_execution: {
+    two_day_execution: {
       rationale: 'Three specific bugs with concrete fixes, and a real trade-off with a stated cost.',
       supporting: [
         'Bug log describes a date-boundary defect with the fix applied.',
@@ -419,7 +419,7 @@ const SCORE_NARRATIVES: Partial<Record<DemoScenario, Partial<Record<RubricCatego
       contradictory: [],
       missing: [],
     },
-    ux_accessibility: {
+    ease_of_use: {
       rationale: 'Clean flow and good states, with a small number of moderate accessibility issues.',
       supporting: [
         'Loading and empty states observed on the trip list.',
@@ -462,7 +462,7 @@ const SCORE_NARRATIVES: Partial<Record<DemoScenario, Partial<Record<RubricCatego
       contradictory: ['Step 15: share dialog opened but the generated link returned a 404.'],
       missing: ['Real-time collaboration could not be verified from a single browser context.'],
     },
-    stability: {
+    solution_usefulness: {
       rationale: 'Notes persisted, but two console errors were recorded during sharing.',
       supporting: ['Persistence check after reload: note content intact.'],
       contradictory: ['Console: 2 errors thrown from the share handler.'],
@@ -474,13 +474,13 @@ const SCORE_NARRATIVES: Partial<Record<DemoScenario, Partial<Record<RubricCatego
       contradictory: ['Summary did not reflect specifics of the note body.'],
       missing: ['AI failure state not observed.'],
     },
-    learning_execution: {
+    two_day_execution: {
       rationale: 'Bugs and trade-off are described concretely, if briefly.',
       supporting: ['Three bugs listed with fixes.', 'Trade-off explains dropping offline support.'],
       contradictory: [],
       missing: [],
     },
-    ux_accessibility: {
+    ease_of_use: {
       rationale: 'Usable but login-first, and several accessibility issues.',
       supporting: ['Mobile smoke test passed.'],
       contradictory: [
@@ -519,7 +519,7 @@ const SCORE_NARRATIVES: Partial<Record<DemoScenario, Partial<Record<RubricCatego
         'Mark-as-watched was not verified.',
       ],
     },
-    stability: {
+    solution_usefulness: {
       rationale: 'Persistence held for the one entity tested; broader CRUD is unverified.',
       supporting: ['Persistence check after reload: watchlist entry present.'],
       contradictory: ['Console: 1 error during search.'],
@@ -531,13 +531,13 @@ const SCORE_NARRATIVES: Partial<Record<DemoScenario, Partial<Record<RubricCatego
       contradictory: ['Step 14: control was clicked and no result rendered within 15 seconds.'],
       missing: ['No successful AI output was observed, so usefulness could not be assessed.'],
     },
-    learning_execution: {
+    two_day_execution: {
       rationale: 'Bugs are described, though two of the three are phrased generically.',
       supporting: ['One bug describes a concrete search defect and its fix.'],
       contradictory: ['Two bug entries describe "UI issues" without specifics.'],
       missing: [],
     },
-    ux_accessibility: {
+    ease_of_use: {
       rationale: 'Basic flow is usable; accessibility scan found several issues.',
       supporting: ['Mobile smoke test loaded and rendered the list.'],
       contradictory: ['axe scan: 1 critical, 5 moderate violations.'],
@@ -896,7 +896,7 @@ export const DEMO_FEEDBACK: Partial<Record<DemoScenario, DemoFeedback>> = {
     productSummary:
       'A day-wise trip planner that lets a traveller create a trip, auto-generate days, and manage activities, with an AI suggestion panel scoped to the destination.',
     strengths: [
-      'The core planning flow completed end to end twice with no errors, including edit and delete — the stability bar you were given was met.',
+      'The core planning flow completed end to end twice with no errors, including edit and delete — the solution_usefulness bar you were given was met.',
       'Activities persisted correctly across a reload, which means the product has a real backend rather than in-page state.',
       'The AI suggestion panel used trip context and produced items that could be added directly to a day, so AI changes the outcome rather than decorating it.',
     ],

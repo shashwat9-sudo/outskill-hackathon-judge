@@ -88,7 +88,7 @@ const SLIDES: Slide[] = [
     title: 'Deep testing, not a screenshot',
     bullets: [
       'A fresh isolated browser per submission, eight-minute budget, downloads disabled.',
-      'Runs the team’s own declared must-have workflow — twice, because that is the stability bar they were taught.',
+      'Runs the team’s own declared must-have workflow — twice, because that is the solution_usefulness bar they were taught.',
       'Proves persistence by reloading and checking the data survived.',
       'Captures console errors, failed requests, dead ends, an accessibility scan, and a mobile pass.',
       'Everything it creates is prefixed OUTSKILL-JUDGE- and cleaned up afterwards.',
@@ -124,7 +124,7 @@ const SLIDES: Slide[] = [
     kicker: '08',
     title: 'Private top 10. Human final four.',
     bullets: [
-      'Eligible submissions are ranked; ties break on core workflow, then stability, then AI usefulness, then learning, then fewer unresolved risks.',
+      'Eligible submissions are ranked; ties break on core workflow, then solution_usefulness, then AI usefulness, then learning, then fewer unresolved risks.',
       'Ranking snapshots are immutable, so the ranking a decision was made against stays reconstructable.',
       'The top 10 is highlighted privately, for reviewers only.',
       'Admins review evidence, override with a reason, and the machine’s original score is preserved.',

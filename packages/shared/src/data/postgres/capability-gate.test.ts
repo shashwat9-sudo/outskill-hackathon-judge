@@ -93,7 +93,7 @@ async function bootstrappedWithCohort(store = productionStore()) {
     day13DeadlineAt: new Date(Date.now() + 86_400_000),
     shortlistTarget: 10,
     submissionInstructions: '',
-    rubricVersion: 'rubric-v1',
+    rubricVersion: 'rubric-v2',
     assessmentConfig: ASSESSMENT_CONFIG,
     status: 'draft',
     closedAt: null,
