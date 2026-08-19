@@ -95,9 +95,7 @@ grant select on submission_credentials to ohj_worker;
 -- What the worker writes
 -- ---------------------------------------------------------------------------
 --
--- Its own output, and only its own. Delete is absent throughout: nothing in the
--- pipeline removes a row, and a worker that could would be able to erase the
--- evidence behind a score.
+-- Its own output, and only its own.
 
 grant select, insert, update on
   assessment_jobs, preflight_checks, artifact_analyses, test_plans,
@@ -106,6 +104,27 @@ grant select, insert, update on
   consistency_reviews, manual_review_flags, disqualifications,
   feedback_reports
 to ohj_worker;
+
+-- ---------------------------------------------------------------------------
+-- The two deletes the pipeline actually performs
+-- ---------------------------------------------------------------------------
+--
+-- This migration originally said "nothing in the pipeline removes a row", and
+-- that was simply untrue. Two stages replace their own output rather than
+-- appending to it, and both died on `permission denied` the first time a job
+-- reached them:
+--
+--   test_plan_steps      — regenerating a plan clears its steps and re-inserts
+--                          them, scoped to that one plan.
+--   assessment_evidence  — re-scoring clears the job's evidence rows and writes
+--                          them again, in one transaction, so a re-run cannot
+--                          double every downstream count.
+--
+-- Both are the worker rewriting rows it wrote itself, for the job it holds.
+-- Neither can reach a learner's submission, an artifact, or the browser
+-- evidence in Storage — those live in tables where DELETE is still absent, and
+-- the objects themselves are not the database's to remove.
+grant delete on test_plan_steps, assessment_evidence to ohj_worker;
 
 -- Append-only. The policy in 0002 additionally requires actor_type = 'worker',
 -- so the worker cannot write an entry that looks like an admin's.

@@ -92,6 +92,7 @@ export function createEvidenceUploader(options: EvidenceUploaderOptions): Eviden
       bucket?: string;
       storagePath?: string;
       maxBytes?: number;
+      contentType?: string;
       attempt?: number;
     } | null;
   }
@@ -160,6 +161,15 @@ export function createEvidenceUploader(options: EvidenceUploaderOptions): Eviden
     try {
       const put = await doFetch(String(ticket.json.uploadUrl), {
         method: 'PUT',
+        /*
+         * The content type comes from the ticket, not from us.
+         *
+         * Each bucket has an allow-list, and a PUT without this header arrives
+         * as `application/octet-stream` and is refused with a 415 — which is
+         * how every upload failed on the first real run: valid bytes, valid
+         * URL, and Storage declining to say why in any way the worker surfaced.
+         */
+        headers: ticket.json.contentType ? { 'content-type': ticket.json.contentType } : {},
         body: Buffer.from(input.bytes),
       });
       putStatus = put.status;

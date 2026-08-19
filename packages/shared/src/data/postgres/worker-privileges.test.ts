@@ -154,6 +154,21 @@ describe('learner work', () => {
     ).rejects.toThrow(denied);
   });
 
+  it('may replace its own plan steps and evidence rows, which two stages do', async () => {
+    /*
+     * The migration used to claim the pipeline never deletes. It does, twice,
+     * and both were found by a real job failing on `permission denied`: a plan
+     * regenerating its steps, and a re-score replacing its evidence rows. Both
+     * rewrite the worker's own output for the job it holds.
+     */
+    for (const table of ['test_plan_steps', 'assessment_evidence']) {
+      await expect(
+        asWorker(() => db.query(`delete from ${table} where false`)),
+        table,
+      ).resolves.toBeDefined();
+    }
+  });
+
   it('cannot be deleted, by any route the worker has', async () => {
     /*
      * Nothing in the pipeline deletes a row. A worker that could delete could

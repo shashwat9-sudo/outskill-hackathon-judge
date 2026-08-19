@@ -38,6 +38,7 @@ import {
 import { checkVersion } from '../../domain/concurrency';
 import {
   EVIDENCE_BUCKETS,
+  EVIDENCE_CONTENT_TYPES,
   EVIDENCE_MAX_BYTES,
   EVIDENCE_UPLOAD_TTL_SECONDS,
   evidencePathBelongsTo,
@@ -2068,6 +2069,7 @@ export class MemoryDataStore implements DataStore {
           storagePath: target.storagePath,
           maxBytes: EVIDENCE_MAX_BYTES[kind],
           expiresInSeconds: EVIDENCE_UPLOAD_TTL_SECONDS,
+          contentType: EVIDENCE_CONTENT_TYPES[kind],
           attempt: job.attemptCount,
         };
       },

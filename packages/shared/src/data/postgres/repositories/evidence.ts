@@ -2,6 +2,7 @@ import type { SqlDatabase } from '../client';
 import type { StorageAdapter } from '../storage';
 import {
   EVIDENCE_BUCKETS,
+  EVIDENCE_CONTENT_TYPES,
   EVIDENCE_MAX_BYTES,
   EVIDENCE_UPLOAD_TTL_SECONDS,
   evidencePathBelongsTo,
@@ -32,6 +33,8 @@ export interface EvidenceTicket {
   storagePath?: string;
   maxBytes?: number;
   expiresInSeconds?: number;
+  /** The content type the upload must declare. Storage refuses anything else. */
+  contentType?: string;
   /**
    * Which attempt this authorisation belongs to.
    *
@@ -210,6 +213,7 @@ export function buildEvidenceStore(db: SqlDatabase, storage: StorageAdapter): Ev
           storagePath: target.storagePath,
           maxBytes: EVIDENCE_MAX_BYTES[kind],
           expiresInSeconds: EVIDENCE_UPLOAD_TTL_SECONDS,
+          contentType: EVIDENCE_CONTENT_TYPES[kind],
           attempt: auth.job.attempt_count,
         };
       } catch {

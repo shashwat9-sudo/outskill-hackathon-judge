@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   EVIDENCE_BUCKETS,
+  EVIDENCE_CONTENT_TYPES,
   EVIDENCE_MAX_BYTES,
   EVIDENCE_UPLOAD_TTL_SECONDS,
   evidencePathBelongsTo,
@@ -162,6 +163,23 @@ describe('the limits', () => {
     // Measured at 0.6–3.4 MB on real controlled runs.
     expect(EVIDENCE_MAX_BYTES.trace).toBeGreaterThan(EVIDENCE_MAX_BYTES.screenshot);
     expect(EVIDENCE_MAX_BYTES.trace).toBeGreaterThanOrEqual(10 * 1024 * 1024);
+  });
+
+  it('declares a content type each bucket actually accepts', () => {
+    /*
+     * These must agree with `allowed_mime_types` in 0003_storage.sql. They did
+     * not for the first real upload — nothing declared a type at all — and
+     * Storage refused every object with a 415 while the pipeline reported a
+     * successful browser run.
+     */
+    expect(EVIDENCE_CONTENT_TYPES.trace).toBe('application/zip');
+    expect(EVIDENCE_CONTENT_TYPES.screenshot).toBe('image/png');
+    expect(EVIDENCE_CONTENT_TYPES.artifact).toBe('application/json');
+
+    // Never the default a bodyless fetch would send.
+    for (const type of Object.values(EVIDENCE_CONTENT_TYPES)) {
+      expect(type).not.toBe('application/octet-stream');
+    }
   });
 
   it('recognises only the three evidence kinds', () => {

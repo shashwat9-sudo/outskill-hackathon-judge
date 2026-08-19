@@ -67,6 +67,7 @@ const ticketOk = {
     storagePath: `c/s/${JOB}/trace/desktop.zip`,
     maxBytes: 50 * 1024 * 1024,
     expiresInSeconds: 300,
+    contentType: 'application/zip',
     attempt: 2,
   },
 };
@@ -133,6 +134,33 @@ describe('a confirmed upload', () => {
     await instance.upload({ jobId: JOB, kind: 'trace', localPath, runId: 'run-1' });
 
     expect(Buffer.from(seen[1]!.body as Uint8Array).toString()).toBe('trace-bytes');
+  });
+});
+
+describe('what the PUT declares', () => {
+  it('sends the content type the ticket specified', async () => {
+    /*
+     * Every upload failed on the first real run because of this header's
+     * absence. The buckets carry an allowed_mime_types list — traces are zips,
+     * screenshots are images — and a PUT without a content type arrives as
+     * application/octet-stream and is refused with a 415. The bytes were fine;
+     * nothing had said what they were.
+     */
+    const { instance, seen } = uploader([ticketOk, putOk, confirmOk]);
+    await instance.upload({ jobId: JOB, kind: 'trace', localPath, runId: 'run-1' });
+
+    const put = seen.find((s) => s.method === 'PUT')!;
+    expect(put.headers['content-type']).toBe('application/zip');
+  });
+
+  it('takes it from the server rather than choosing one', async () => {
+    // The worker must not be able to write text/html into a bucket a reviewer
+    // will later open. The kind decides, server-side.
+    const ticket = { ...ticketOk, json: { ...ticketOk.json, contentType: 'image/png' } };
+    const { instance, seen } = uploader([ticket, putOk, confirmOk]);
+    await instance.upload({ jobId: JOB, kind: 'screenshot', localPath, stepId: 'step-1' });
+
+    expect(seen.find((s) => s.method === 'PUT')!.headers['content-type']).toBe('image/png');
   });
 });
 

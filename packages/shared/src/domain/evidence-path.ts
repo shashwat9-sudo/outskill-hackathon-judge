@@ -128,6 +128,26 @@ export function evidencePathBelongsTo(
  * signed upload URLs are single-destination — this one cannot be pointed
  * anywhere else even while it is valid.
  */
+/**
+ * What each kind is written as, decided here rather than by the uploader.
+ *
+ * The buckets carry an `allowed_mime_types` allow-list — traces are zips,
+ * screenshots are images — and a PUT with no content type arrives as
+ * `application/octet-stream`, which every one of them refuses. That is exactly
+ * how the first real upload failed: the bytes were captured, the signed URL was
+ * valid, and Storage returned 415 because nothing had said what the file was.
+ *
+ * Derived from the kind, alongside the bucket and the path, so the worker is
+ * told what to send instead of choosing. A worker that picked its own content
+ * type could try to write `text/html` into a bucket a reviewer's browser will
+ * later open, and the allow-list would be the only thing standing in the way.
+ */
+export const EVIDENCE_CONTENT_TYPES: Record<EvidenceKind, string> = {
+  screenshot: 'image/png',
+  trace: 'application/zip',
+  artifact: 'application/json',
+};
+
 export const EVIDENCE_UPLOAD_TTL_SECONDS = 300;
 
 /** The largest evidence object we will accept, per kind. */
