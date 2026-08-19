@@ -1858,7 +1858,24 @@ export class MemoryDataStore implements DataStore {
       },
 
       saveBrowserRun: async (run, steps) => {
-        const record: BrowserTestRun = { ...clone(run), id: newId() };
+        // Same rules as production: the attempt comes from the job, and one
+        // run per viewport per attempt replaces rather than accumulates.
+        const job = this.db.jobs.find((j: AssessmentJob) => j.id === run.jobId);
+        const attempt = job?.attemptCount ?? 1;
+
+        const existing = this.db.browserRuns.find(
+          (r) => r.jobId === run.jobId && r.attempt === attempt && r.viewport === run.viewport,
+        );
+        if (existing) {
+          this.db.browserSteps = this.db.browserSteps.filter((s) => s.runId !== existing.id);
+          Object.assign(existing, clone(run), { id: existing.id, attempt });
+          steps.forEach((step) => {
+            this.db.browserSteps.push({ ...clone(step), id: newId(), runId: existing.id });
+          });
+          return clone(existing);
+        }
+
+        const record: BrowserTestRun = { ...clone(run), id: newId(), attempt };
         this.db.browserRuns.push(record);
         steps.forEach((step) => {
           this.db.browserSteps.push({ ...clone(step), id: newId(), runId: record.id });
@@ -1869,7 +1886,12 @@ export class MemoryDataStore implements DataStore {
       listBrowserRuns: async (jobId) =>
         clone(
           this.db.browserRuns
-            .filter((r) => r.jobId === jobId)
+            .filter((r) => {
+              if (r.jobId !== jobId) return false;
+              // Only the current attempt reaches judging.
+              const job = this.db.jobs.find((j: AssessmentJob) => j.id === jobId);
+              return r.attempt === (job?.attemptCount ?? 1);
+            })
             .map((run) => ({
               ...run,
               steps: this.db.browserSteps

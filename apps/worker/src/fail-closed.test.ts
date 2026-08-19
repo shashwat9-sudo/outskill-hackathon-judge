@@ -145,3 +145,41 @@ describe('the environment the worker will accept', () => {
     expect(text).toMatch(/storageCredential: 'absent'/);
   });
 });
+
+describe('the browser’s way out', () => {
+  /*
+   * The deployed worker judges URLs strangers supplied. Everything below is
+   * about the browser having exactly one route to the network, and that route
+   * being one we inspect.
+   */
+
+  it('never enables the loopback escape hatch', async () => {
+    // `allowLoopbackForTesting` exists so the suite can drive a fixture app on
+    // 127.0.0.1 through the proxy. In the worker it is derived from the
+    // controlled-run flag, which the worker also never sets.
+    const text = await source();
+    expect(text).not.toMatch(/allowLoopbackForTesting:\s*true/);
+    expect(text).not.toMatch(/allowPrivateOriginForTesting:\s*true/);
+  });
+
+  it('launches the browser behind the egress proxy, with no loopback bypass', async () => {
+    /*
+     * Two things have to be true together. The proxy takes DNS away from
+     * Chromium, which is what closes rebinding — and `<-loopback>` removes the
+     * implicit bypass Chromium applies to loopback destinations, without which
+     * `http://127.0.0.1` would go direct and never be examined at all.
+     */
+    const runner = await readFile(
+      resolve(dirname(fileURLToPath(import.meta.url)), 'browser-runner.ts'),
+      'utf8',
+    );
+    expect(runner).toMatch(/createEgressProxy\(/);
+    expect(runner).toMatch(/egressProxyArgs\(proxy\)/);
+
+    const proxyModule = await readFile(
+      resolve(dirname(fileURLToPath(import.meta.url)), 'egress-proxy.ts'),
+      'utf8',
+    );
+    expect(proxyModule).toMatch(/--proxy-bypass-list=<-loopback>/);
+  });
+});

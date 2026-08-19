@@ -443,6 +443,14 @@ export interface TestPlanStep {
 export interface BrowserTestRun {
   id: string;
   jobId: string;
+  /**
+   * Which attempt of the job produced this run.
+   *
+   * Scoring reads only the current attempt. Earlier runs stay for audit and are
+   * never mixed into a live assessment — a re-judged submission must not be
+   * marked partly on a run that no longer describes the product.
+   */
+  attempt: number;
   viewport: 'desktop' | 'mobile';
   startedAt: Date;
   finishedAt: Date | null;

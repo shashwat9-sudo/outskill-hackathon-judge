@@ -853,6 +853,8 @@ function seedAssessment(
     db.browserRuns.push({
       id: runId,
       jobId,
+      // Fixtures are the job's first and only attempt.
+      attempt: 1,
       viewport: run.viewport,
       startedAt: hoursAgo(3.8),
       finishedAt: new Date(hoursAgo(3.8).getTime() + run.durationMs),

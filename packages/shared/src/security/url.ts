@@ -151,9 +151,39 @@ export function classifyIpv6(address: string): AddressClassification {
   const mapped = /^::(?:ffff:)?(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.exec(withoutZone);
   if (mapped?.[1]) return classifyIpv4(mapped[1]);
 
+  /*
+   * The same address after a URL parser has had it.
+   *
+   * `new URL('http://[::ffff:127.0.0.1]/')` reports its hostname as
+   * `::ffff:7f00:1` — the dotted form rewritten as hex — and the pattern above
+   * does not match that. Everything below then read the first group, found it
+   * empty, and fell through to `safe: true`. Loopback, wearing an IPv6 costume,
+   * normalised by the very parser we rely on.
+   *
+   * The last 32 bits are the IPv4 address; classify them as one.
+   */
+  const mappedHex = /^::(?:ffff:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(withoutZone);
+  if (mappedHex?.[1] && mappedHex[2]) {
+    const high = parseInt(mappedHex[1], 16);
+    const low = parseInt(mappedHex[2], 16);
+    const dotted = [high >> 8, high & 0xff, low >> 8, low & 0xff].join('.');
+    return classifyIpv4(dotted);
+  }
+
   const firstGroup = withoutZone.split(':')[0] ?? '';
+  /*
+   * An address starting `::` has no first group, and treating that as prefix 0
+   * used to mean "not one of the private ranges, therefore fine". Anything in
+   * the `::/96` space that is not already handled above is a compatibility form
+   * we do not interpret, so it is refused rather than assumed public.
+   */
+  if (firstGroup === '') {
+    return { safe: false, code: 'malformed', reason: `Unrecognised IPv6 form: ${withoutZone}` };
+  }
   const prefix = parseInt(firstGroup.padEnd(4, '0'), 16);
-  if (Number.isNaN(prefix)) return { safe: true };
+  if (Number.isNaN(prefix)) {
+    return { safe: false, code: 'malformed', reason: `Unrecognised IPv6 form: ${withoutZone}` };
+  }
 
   // fc00::/7 unique-local
   if ((prefix & 0xfe00) === 0xfc00)

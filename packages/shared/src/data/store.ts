@@ -550,8 +550,13 @@ export interface AssessmentStore extends EvidenceStore, JudgingInputStore {
   ): Promise<TestPlan>;
   getTestPlan(jobId: string): Promise<(TestPlan & { steps: TestPlanStep[] }) | null>;
 
+  /*
+   * `attempt` is absent here on purpose: it is read from the job, not supplied.
+   * A caller that could choose its own could write into a previous attempt's
+   * slot and put stale evidence back in front of scoring.
+   */
   saveBrowserRun(
-    run: Omit<BrowserTestRun, 'id'>,
+    run: Omit<BrowserTestRun, 'id' | 'attempt'>,
     steps: Omit<BrowserTestStep, 'id' | 'runId'>[],
   ): Promise<BrowserTestRun>;
   listBrowserRuns(jobId: string): Promise<(BrowserTestRun & { steps: BrowserTestStep[] })[]>;

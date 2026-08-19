@@ -236,14 +236,45 @@ export function buildPipelineMethods(db: SqlDatabase): PipelineMethods {
      * The distinction decides whether a team is marked down for a broken
      * feature or for a feature the run ran out of time to open.
      */
+    /**
+     * Record one browser run against the attempt that produced it.
+     *
+     * Upserted rather than appended. Two executions can legitimately happen for
+     * the same attempt — a worker restarting mid-stage resumes its own live
+     * lease and runs the browser again — and the second describes the product
+     * better than the first, so it replaces it. A genuinely new attempt carries
+     * a different number and lands beside the old one instead.
+     *
+     * The attempt is read from the job rather than passed in: a caller that
+     * could choose its own could write into a previous attempt's slot.
+     */
     async saveBrowserRun(run, steps) {
       return db.transaction(async (tx) => {
+        const { rows: jobRows } = await tx.query<{ attempt_count: number }>(
+          'select attempt_count from assessment_jobs where id = $1',
+          [run.jobId],
+        );
+        const attempt = jobRows[0]?.attempt_count ?? 1;
+
         const { rows } = await tx.query(
           `insert into browser_test_runs
-             (job_id, viewport, started_at, finished_at, duration_ms, status,
+             (job_id, attempt, viewport, started_at, finished_at, duration_ms, status,
               browser_version, trace_path, console_error_count, network_failure_count,
               a11y_violation_count, a11y_summary, cleanup_status, timed_out)
-           values ($1, $2, $3, $4, $5, $6::run_status, $7, $8, $9, $10, $11, $12::jsonb, $13, $14)
+           values ($1, $15, $2, $3, $4, $5, $6::run_status, $7, $8, $9, $10, $11, $12::jsonb, $13, $14)
+           on conflict (job_id, attempt, viewport) do update set
+             started_at = excluded.started_at,
+             finished_at = excluded.finished_at,
+             duration_ms = excluded.duration_ms,
+             status = excluded.status,
+             browser_version = excluded.browser_version,
+             trace_path = excluded.trace_path,
+             console_error_count = excluded.console_error_count,
+             network_failure_count = excluded.network_failure_count,
+             a11y_violation_count = excluded.a11y_violation_count,
+             a11y_summary = excluded.a11y_summary,
+             cleanup_status = excluded.cleanup_status,
+             timed_out = excluded.timed_out
            returning *`,
           [
             run.jobId,
@@ -260,9 +291,15 @@ export function buildPipelineMethods(db: SqlDatabase): PipelineMethods {
             json(run.a11ySummary ?? {}),
             run.cleanupStatus,
             run.timedOut,
+            attempt,
           ],
         );
         const saved = mapBrowserRun(rows[0]!);
+
+        // The run row survived the upsert, so its steps are rewritten rather
+        // than added to. Without this a restart would leave both executions'
+        // steps hanging off one run.
+        await tx.query('delete from browser_test_steps where run_id = $1', [saved.id]);
 
         for (const step of steps) {
           await tx.query(
@@ -287,9 +324,20 @@ export function buildPipelineMethods(db: SqlDatabase): PipelineMethods {
       });
     },
 
+    /**
+     * The current attempt's runs, which is what judging is entitled to see.
+     *
+     * Scoring and the evidence lookup both read this. Returning every attempt
+     * would let a re-judged submission be marked partly on a run that no longer
+     * describes the product. The admin submission view queries these tables
+     * directly and still shows the full history.
+     */
     async listBrowserRuns(jobId) {
       const { rows } = await db.query(
-        'select * from browser_test_runs where job_id = $1 order by started_at',
+        `select r.* from browser_test_runs r
+           join assessment_jobs j on j.id = r.job_id
+          where r.job_id = $1 and r.attempt = j.attempt_count
+          order by r.started_at`,
         [jobId],
       );
       if (rows.length === 0) return [];

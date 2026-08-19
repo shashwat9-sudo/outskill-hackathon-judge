@@ -13,6 +13,7 @@
 import { chromium, type Browser, type BrowserContext } from 'playwright';
 import type { TestStep } from '@ohj/shared';
 import { PlanExecutor, type RunObservations, type StepResult } from './executor';
+import { createEgressProxy, egressProxyArgs, type EgressProxy } from './egress-proxy';
 
 export interface BrowserRunOptions {
   productUrl: string;
@@ -72,8 +73,25 @@ export async function runBrowserPlan(options: BrowserRunOptions): Promise<Browse
   };
   let browserVersion = 'unknown';
   let tracePath: string | null = null;
+  let proxy: EgressProxy | null = null;
 
   try {
+    /*
+     * Every packet leaves through our proxy, or does not leave.
+     *
+     * A browser configured with an HTTP proxy does not resolve hostnames — it
+     * hands the name over and asks for the connection — so this is what takes
+     * DNS away from Chromium and closes rebinding. Navigations, redirects,
+     * subresources and WebSockets all go the same way.
+     *
+     * If the proxy cannot be started, the run does not happen. Launching without
+     * it would mean judging a stranger's URL with nothing between their DNS and
+     * our network.
+     */
+    proxy = await createEgressProxy({
+      allowLoopbackForTesting: options.allowPrivateOriginForTesting === true,
+    });
+
     browser = await chromium.launch({
       headless: options.headless,
       args: [
@@ -81,6 +99,7 @@ export async function runBrowserPlan(options: BrowserRunOptions): Promise<Browse
         // No extensions, no background networking — the judge is the only actor.
         '--disable-extensions',
         '--disable-background-networking',
+        ...egressProxyArgs(proxy),
       ],
     });
     browserVersion = `Chromium ${browser.version()}`;
@@ -183,6 +202,8 @@ export async function runBrowserPlan(options: BrowserRunOptions): Promise<Browse
     // process holding an untrusted page open.
     await context?.close().catch(() => undefined);
     await browser?.close().catch(() => undefined);
+    // The proxy outlives the browser only long enough to close cleanly.
+    await proxy?.close().catch(() => undefined);
   }
 
   const finishedAt = new Date();
