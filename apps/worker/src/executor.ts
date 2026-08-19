@@ -38,6 +38,17 @@ export interface ExecutionContext {
   /** Absolute wall-clock cutoff for the whole run. */
   deadline: number;
   screenshotDir: string;
+  /**
+   * Part of the screenshot filename, because both viewports share a directory.
+   *
+   * Without it desktop and mobile produce the same name for the same step, the
+   * second overwrites the first on disk, and — because the durable path is
+   * derived from the basename — the second upload is refused because an object
+   * already exists there. Mobile evidence was being lost that way, quietly,
+   * with only a warning to show for it. The trace path has always carried the
+   * viewport; this is the same fix for screenshots.
+   */
+  viewport: 'desktop' | 'mobile';
   onScreenshot?: (label: string, path: string) => void;
   resolver?: (hostname: string) => Promise<string[]>;
   /**
@@ -288,7 +299,7 @@ export class PlanExecutor {
 
       case 'screenshot': {
         const safeLabel = step.label.replace(/[^a-z0-9-]/gi, '-').slice(0, 60) || `step-${index}`;
-        const path = `${this.ctx.screenshotDir}/${String(index).padStart(3, '0')}-${safeLabel}.png`;
+        const path = `${this.ctx.screenshotDir}/${this.ctx.viewport}-${String(index).padStart(3, '0')}-${safeLabel}.png`;
         await page.screenshot({ path, fullPage: false });
         this.ctx.onScreenshot?.(safeLabel, path);
         return { detail: `Captured "${safeLabel}".`, screenshotPath: path };

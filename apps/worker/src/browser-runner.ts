@@ -115,6 +115,7 @@ export async function runBrowserPlan(options: BrowserRunOptions): Promise<Browse
       credentials: options.credentials,
       deadline,
       screenshotDir: options.screenshotDir,
+      viewport: options.viewport,
       allowPrivateOriginForTesting: allowPrivateOrigin,
     });
     executor.attachListeners();
@@ -155,6 +156,7 @@ export async function runBrowserPlan(options: BrowserRunOptions): Promise<Browse
         credentials: options.credentials,
         deadline: Date.now() + 30_000,
         screenshotDir: options.screenshotDir,
+        viewport: options.viewport,
         allowPrivateOriginForTesting: allowPrivateOrigin,
       });
       let succeeded = 0;
