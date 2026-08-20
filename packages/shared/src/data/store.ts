@@ -295,9 +295,9 @@ export interface CohortStore {
    * a cohort known to contain no learner work.
    */
   createCohort(
-    input: Omit<Cohort, 'id' | 'createdAt' | 'updatedAt' | 'finalisedAt' | 'isSynthetic'>,
+    input: Omit<Cohort, 'id' | 'createdAt' | 'updatedAt' | 'finalisedAt' | 'isSynthetic' | 'externalCohortId'>,
   ): Promise<Cohort>;
-  updateCohort(id: string, patch: Partial<Omit<Cohort, 'isSynthetic'>>): Promise<Cohort>;
+  updateCohort(id: string, patch: Partial<Omit<Cohort, 'isSynthetic' | 'externalCohortId'>>): Promise<Cohort>;
   setCohortStatus(id: string, status: CohortStatus): Promise<Cohort>;
 
   /** Manual close. Records when and that it was an admin action. */

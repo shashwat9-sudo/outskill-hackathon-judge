@@ -106,6 +106,20 @@ export const envSchema = z.object({
    * capabilities, with no way to rotate one without breaking the other.
    */
   PARTNER_API_TOKEN: z.string().optional(),
+
+  /*
+   * Google Sheets intake. Server-side only; the worker never needs any of it.
+   *
+   * The private key arrives with escaped newlines on every platform we use, so
+   * it is normalised at the point of use rather than trusted to be well-formed.
+   */
+  GOOGLE_SERVICE_ACCOUNT_EMAIL: z.string().optional(),
+  GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY: z.string().optional(),
+  GOOGLE_SHEETS_SPREADSHEET_ID: z.string().optional(),
+  GOOGLE_SHEETS_TAB_NAME: z.string().optional(),
+  /** Which Judge cohort this sheet belongs to. Never a column in the sheet. */
+  GOOGLE_SHEETS_EXTERNAL_COHORT_ID: z.string().optional(),
+  GOOGLE_SHEETS_COHORT_NAME: z.string().optional(),
   WORKER_ID: z.string().optional(),
   /** Where the worker serves /healthz and /readyz. Container-internal only. */
   WORKER_HEALTH_PORT: positiveInt(8080),

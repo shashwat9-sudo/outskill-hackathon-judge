@@ -1,8 +1,13 @@
 # Judge API — for the Outskill Hackathon product
 
 The Judge is a private backend. It has no learner-facing UI in the new design:
-the Hackathon product owns the form, the identifiers and the relationship, and
-calls these three endpoints.
+the Hackathon product owns the form, the identifiers and the relationship.
+
+There are two ways in. This document covers the **direct API**. Production
+intake is a **Google Sheet** the Hackathon product writes to, pulled by an
+operator — see [GOOGLE_SHEETS_INTEGRATION.md](GOOGLE_SHEETS_INTEGRATION.md).
+Both paths converge on the same ingest, the same identity rules and the same
+rubric.
 
 1. `POST /api/partner/cohorts` — register a cohort (once, before submissions)
 2. `POST /api/partner/submissions` — submit a product for judging
@@ -118,7 +123,8 @@ Content-Type: application/json
 | `productName` | yes | |
 | `briefDescription` | no | What it does, who it is for, what problem it solves. |
 | `mainUserAction` | **yes** | The answer to *"What is the main thing a user should be able to do successfully?"* **This drives the browser test plan.** |
-| `aiValue` | no | The answer to *"How does AI help the user?"* |
+| `aiValue` | no | The answer to *"How does AI help the user?"* Feeds AI Usefulness. |
+| `whatGotWorking` | no | The answer to *"What did your team get working in these two days?"* Feeds Two-Day Execution as **context, not proof** — where it disagrees with the browser run, the browser wins. |
 | `productUrl` | yes | http/https. Public hostname — private/internal addresses are refused. |
 | `accessMode` | yes | `"open"` or `"credentials"`. |
 | `judgeCredentials` | only if `accessMode: "credentials"` | `{ username, password, notes? }`. Encrypted at rest, decrypted only at the moment the browser signs in, never returned. |

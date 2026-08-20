@@ -302,6 +302,9 @@ export function buildCohortStore(db: SqlDatabase): CohortStore {
        * a cohort known to hold no learner work.
        */
       delete (writable as Record<string, unknown>).isSynthetic;
+      // Same reasoning: the external mapping decides which ranking a whole
+      // cohort competes in, and is set only by the partner sync path.
+      delete (writable as Record<string, unknown>).externalCohortId;
       delete (writable as Record<string, unknown>).id;
       delete (writable as Record<string, unknown>).createdAt;
       delete (writable as Record<string, unknown>).updatedAt;

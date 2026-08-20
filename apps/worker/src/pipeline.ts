@@ -995,6 +995,9 @@ function buildWrittenSubmission(
     `Bugs fixed: ${s.bugsFixed.map((b) => `${b.description} — ${b.howFixed}`).join(' | ')}`,
     `Trade-off: ${s.majorTradeoff}`,
     `Day 12 to 13: ${s.day12ToDay13Changes}`,
+    // The team's own account of what they finished. Context for two-day
+    // execution; never a substitute for what the browser observed.
+    `What the team got working: ${s.whatGotWorking}`,
     `Learning: ${s.mostImportantLearning}`,
     `Next plan: ${s.nextSevenDayPlan}`,
     `Stack: ${s.builderStack}`,

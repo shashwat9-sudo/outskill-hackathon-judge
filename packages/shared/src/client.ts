@@ -28,6 +28,7 @@ export * from './domain/cohort-deletion';
 export * from './domain/missing-items';
 export * from './domain/evidence-path';
 export * from './utils/learner-sheet';
+export * from './intake/sheet-rows';
 // Guide content is plain data; only its PDF renderer touches Buffer.
 export type * from './content/submission-guide';
 // Learner guidance is pure data — the same sentences the form, the example and

@@ -140,7 +140,7 @@ export const RUBRIC_CATEGORIES = [
     displayOrder: 6,
     publicDescription: 'How much of a real product you got working in the two days you had.',
     privateGuidance:
-      'How much genuinely working product exists, judged against two days and a beginner starting point. Reward teams who chose a scope they could finish and finished it. A narrow product that works is better execution than a broad one that does not. This is not a measure of hours worked, commit counts or feature counts, none of which we can see or should infer. It is what is standing at the end.',
+      'The team answered what they managed to get working in the two days; read it alongside what the browser actually did. Where the two disagree, the browser wins — this answer is context, not proof. How much genuinely working product exists, judged against two days and a beginner starting point. Reward teams who chose a scope they could finish and finished it. A narrow product that works is better execution than a broad one that does not. This is not a measure of hours worked, commit counts or feature counts, none of which we can see or should infer. It is what is standing at the end.',
     evidenceSources: ['browser_step', 'screenshot', 'written', 'deck'],
   },
   {

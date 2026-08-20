@@ -29,6 +29,7 @@ const SCHEMA_MIGRATIONS = [
   '0008_browser_run_attempts',
   '0009_partner_ingest',
   '0010_partner_cohort_scope',
+  '0011_what_got_working',
 ] as const;
 
 /**

@@ -21,6 +21,10 @@ export * from './domain/cohort-deletion';
 export * from './domain/missing-items';
 export * from './domain/evidence-path';
 export * from './utils/learner-sheet';
+export * from './intake/sheet-rows';
+export * from './intake/sheet-sync';
+// Server-only: reaches node:crypto. Never exported from the browser barrel.
+export * from './intake/google-sheets';
 export * from './domain/receipt-pdf';
 export * from './domain/document-pdf';
 export * from './content/submission-guide';

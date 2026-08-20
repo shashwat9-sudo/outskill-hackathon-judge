@@ -70,6 +70,14 @@ export interface Cohort {
    * every one of those can be true by accident for a real cohort.
    */
   isSynthetic: boolean;
+  /**
+   * The internal product's own cohort identifier, e.g. "AIAP-C13".
+   *
+   * Set only by the authenticated cohort-sync path. One external id maps to
+   * exactly one Judge cohort, permanently — it is what keeps C13 and C14
+   * ranking separately.
+   */
+  externalCohortId: string | null;
   finalisedAt: Date | null;
   /** When submissions actually stopped being accepted. */
   closedAt: Date | null;
@@ -273,6 +281,14 @@ export interface Submission {
   deliberatelyExcluded: string | null;
   majorTradeoff: string | null;
   day12ToDay13Changes: string | null;
+  /**
+   * "What did your team manage to get working in these two days?"
+   *
+   * Supporting context for two-day execution, in the team's own words. A claim
+   * about the product, not evidence of it: where this and the browser run
+   * disagree, what the browser saw is what counts.
+   */
+  whatGotWorking: string | null;
   mostImportantLearning: string | null;
   nextSevenDayPlan: string | null;
   builderStack: string | null;

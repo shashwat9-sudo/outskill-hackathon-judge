@@ -987,6 +987,7 @@ export class MemoryDataStore implements DataStore {
           // Cohorts are real unless an operator says otherwise, in memory as in
           // Postgres. The input type cannot carry this field.
           isSynthetic: false,
+          externalCohortId: null,
           createdAt: new Date(),
           updatedAt: new Date(),
         };
@@ -2453,6 +2454,7 @@ export class MemoryDataStore implements DataStore {
       deliberatelyExcluded: null,
       majorTradeoff: null,
       day12ToDay13Changes: null,
+      whatGotWorking: null,
       mostImportantLearning: null,
       nextSevenDayPlan: null,
       builderStack: null,

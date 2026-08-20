@@ -185,6 +185,7 @@ export function seedDemoDatabase(db: MemoryDatabase): void {
     // Demo fixtures are synthetic, and now say so rather than being recognised
     // by which database engine they happen to live in.
     isSynthetic: true,
+    externalCohortId: null,
   };
   db.cohorts.push(cohort);
 
@@ -568,6 +569,7 @@ function buildSubmission(input: {
     deliberatelyExcluded: incomplete ? null : text.excluded,
     majorTradeoff: incomplete ? null : text.tradeoff,
     day12ToDay13Changes: incomplete ? null : text.dayChanges,
+    whatGotWorking: null,
     mostImportantLearning: incomplete ? null : text.learning,
     nextSevenDayPlan: incomplete ? null : text.nextPlan,
     builderStack: incomplete ? null : 'Bolt for the front end, Supabase for data and auth, an LLM API for the AI feature.',
