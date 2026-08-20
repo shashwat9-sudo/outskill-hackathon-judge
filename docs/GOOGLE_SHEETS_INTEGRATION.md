@@ -171,7 +171,32 @@ The same group number under a *different* cohort is valid and isolated.
 
 ## Running it
 
-Judge Admin → intake, or `POST /api/admin/intake/sheet` (admin session required).
+**Judge Admin → Google Sheet intake** (`/admin/intake`). Three steps, in order:
+
+1. **Test connection** — confirms we can open the sheet, that it is the expected
+   service account, and that the required columns are present. Changes nothing.
+2. **Check the sheet** — the dry run. Shows counts and a per-group table saying
+   what would be imported and what needs fixing. Writes nothing.
+3. **Import final submissions** — needs a check first, then a confirmation
+   naming the cohort and the exact number. Queues judging jobs.
+
+The API route `POST /api/admin/intake/sheet` does the same thing for scripting;
+both require an admin session.
+
+### If the sheet changes between checking and importing
+
+Each check produces a fingerprint of what an import would act on. Import
+re-reads the sheet and compares — a mismatch refuses the import and asks for
+another check, so the numbers on screen always describe what actually happens.
+Cosmetic edits (a team member's name, a reordered column) do not invalidate a
+check; a changed product URL or main user action does.
+
+### A group that changed after it was imported
+
+Reported as **"Already imported, but the Sheet has changed since"** and *not*
+re-imported. Replacing an assessment because somebody edited a cell afterwards
+changes a team's score, so it is a human decision, not a side effect of pressing
+import again.
 
 ### Dry Run — `{ "mode": "dryRun" }`
 

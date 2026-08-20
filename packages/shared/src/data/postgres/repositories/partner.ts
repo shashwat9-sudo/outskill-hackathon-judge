@@ -137,6 +137,17 @@ export interface PartnerStore {
    * showing a team another cohort's score.
    */
   getPartnerResult(externalCohortId: string, externalSubmissionId: string): Promise<PartnerResult>;
+
+  /**
+   * What has already been ingested for a cohort, and what it was judged on.
+   *
+   * Used by sheet intake to tell "already imported" from "already imported, and
+   * the sheet has changed since". Returns the snapshot, which never contains a
+   * credential.
+   */
+  listIngestedSnapshots(
+    externalCohortId: string,
+  ): Promise<{ groupNumber: number; snapshot: Record<string, unknown> | null }[]>;
 }
 
 /** Stages that mean judging has not finished yet. */
@@ -395,6 +406,20 @@ export function buildPartnerStore(
 
         return { ok: true, submissionId: submission.id, status: submission.status, duplicate: false };
       });
+    },
+
+    async listIngestedSnapshots(externalCohortId) {
+      const { rows } = await db.query<{
+        group_number: number;
+        ingest_snapshot: Record<string, unknown> | null;
+      }>(
+        `select t.group_number, s.ingest_snapshot
+           from submissions s
+           join teams t on t.id = s.team_id
+          where s.external_cohort_id = $1 and s.external_submission_id is not null`,
+        [externalCohortId],
+      );
+      return rows.map((r) => ({ groupNumber: r.group_number, snapshot: r.ingest_snapshot }));
     },
 
     async getPartnerResult(externalCohortId, externalSubmissionId) {

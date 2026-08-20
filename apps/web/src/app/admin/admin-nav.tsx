@@ -24,6 +24,7 @@ interface NavItem {
 const NAV: NavItem[] = [
   { href: '/admin', label: 'Overview', icon: '◈' },
   { href: '/admin/cohorts', label: 'Cohorts', icon: '▦' },
+  { href: '/admin/intake', label: 'Google Sheet intake', icon: '⇩' },
   { href: '/admin/submissions', label: 'Submissions', icon: '▤', match: ['/admin/submissions'] },
   { href: '/admin/assessment-queue', label: 'Judging', icon: '◐' },
   { href: '/admin/ranking', label: 'Shortlist', icon: '★' },

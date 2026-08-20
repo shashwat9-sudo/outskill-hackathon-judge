@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { DataStore } from '../data/store';
 import { parseCsv } from '../utils/csv';
 import {
@@ -30,6 +31,17 @@ export interface SheetSource {
   describe(): { kind: 'google_sheets' | 'csv'; spreadsheetId?: string; tabName?: string };
 }
 
+/** One group, as an operator needs to see it. Never a credential, never PII. */
+export interface IntakeGroupRow {
+  row: number;
+  groupNumber: number;
+  productName: string;
+  category: string;
+  status: 'ready' | 'already_synced' | 'changed_since_sync' | 'blocked' | 'duplicate';
+  /** Plain-language explanation when the status is not 'ready'. */
+  issue?: string;
+}
+
 export interface SyncReport {
   spreadsheetId: string | null;
   tabName: string | null;
@@ -45,6 +57,20 @@ export interface SyncReport {
   alreadyIngested: number;
   jobsQueued: number;
   errors: SheetRowIssue[];
+  /** Per-group operator view, safe to render. */
+  groups: IntakeGroupRow[];
+  /**
+   * A fingerprint of exactly what a sync would act on.
+   *
+   * The operator reads a dry run and then decides to sync. In between, a
+   * learner can still edit the sheet — so the sync re-reads, re-parses and
+   * compares this. A mismatch means the numbers on screen no longer describe
+   * reality, and the operator is asked to look again rather than importing
+   * something they never reviewed.
+   */
+  fingerprint: string;
+  /** Groups already ingested whose sheet row has since changed. */
+  changedSinceSync: { groupNumber: number; row: number }[];
   /** Something stopped the whole run: no headers, Google refused, and so on. */
   fatalError?: string;
   dryRun: boolean;
@@ -58,6 +84,48 @@ export interface SyncOptions {
   cohortName: string;
   /** True to validate and report without writing anything. */
   dryRun: boolean;
+  /**
+   * The fingerprint the operator was shown when they decided to sync.
+   *
+   * Sync refuses if the sheet no longer matches it. Without this, a dry run
+   * showing 118 submissions could be followed by a sync importing something
+   * else entirely, and nobody would know until the scores came out.
+   */
+  expectedFingerprint?: string;
+}
+
+/**
+ * What a sync would act on, reduced to a stable string.
+ *
+ * Built from the normalised judging inputs, so cosmetic sheet edits — a
+ * reordered column, a changed team member name — do not invalidate a dry run,
+ * while a changed product URL or main user action does. Credentials are
+ * included only as a presence marker: a password must not reach a hash that
+ * ends up in a URL, a log or a report.
+ */
+export function fingerprintRows(rows: { groupNumber: number; input: unknown; credentials: unknown }[]): string {
+  const canonical = [...rows]
+    .sort((a, b) => a.groupNumber - b.groupNumber)
+    .map((r) => ({ group: r.groupNumber, input: r.input, hasCredentials: r.credentials !== null }));
+  return createHash('sha256').update(JSON.stringify(canonical)).digest('hex').slice(0, 32);
+}
+
+/** The judging-relevant shape of a stored snapshot, for change detection. */
+function snapshotFingerprint(snapshot: Record<string, unknown> | null): string | null {
+  if (!snapshot) return null;
+  const relevant = {
+    productName: snapshot.productName,
+    briefDescription: snapshot.briefDescription,
+    mainUserAction: snapshot.mainUserAction,
+    aiValue: snapshot.aiValue,
+    whatGotWorking: snapshot.whatGotWorking,
+    productUrl: snapshot.productUrl,
+    accessMode: snapshot.accessMode,
+    ideaSlug: snapshot.ideaSlug,
+    loomUrl: snapshot.loomUrl ?? null,
+    deckUrl: snapshot.deckUrl ?? null,
+  };
+  return createHash('sha256').update(JSON.stringify(relevant)).digest('hex').slice(0, 32);
 }
 
 /** Mask the middle of an id so a report can be shared without exposing it. */
@@ -91,6 +159,9 @@ export async function syncSheet(options: SyncOptions): Promise<SyncReport> {
     alreadyIngested: 0,
     jobsQueued: 0,
     errors: [],
+    groups: [],
+    fingerprint: '',
+    changedSinceSync: [],
     dryRun: options.dryRun,
   };
 
@@ -135,8 +206,84 @@ export async function syncSheet(options: SyncOptions): Promise<SyncReport> {
 
   const parsed: ParsedIntakeSheet = parseSheetRows(rows, { approvedCategories });
 
+  /*
+   * What is already here, and whether the sheet still says the same thing.
+   *
+   * A group already ingested is reported as such rather than re-imported. If
+   * its sheet row has since changed, that is surfaced — not silently applied.
+   * Replacing an assessment because somebody edited a cell afterwards is a
+   * policy decision with real consequences for a team's score, and it belongs
+   * to a human, not to an import button.
+   */
+  const existingByGroup = new Map<number, string | null>();
+  for (const entry of await options.store.partner.listIngestedSnapshots(options.externalCohortId)) {
+    existingByGroup.set(entry.groupNumber, snapshotFingerprint(entry.snapshot));
+  }
+
+  const duplicatedGroups = new Set(parsed.duplicateGroups.map((d) => d.groupNumber));
+  const changedSinceSync: SyncReport['changedSinceSync'] = [];
+
+  const groups: IntakeGroupRow[] = [];
+  for (const row of parsed.valid) {
+    const known = existingByGroup.has(row.groupNumber);
+    const current = fingerprintRows([row]).slice(0, 32);
+    const stored = existingByGroup.get(row.groupNumber) ?? null;
+    const rowFingerprint = snapshotFingerprint({
+      ...(row.input as unknown as Record<string, unknown>),
+    });
+    void current;
+
+    let status: IntakeGroupRow['status'] = 'ready';
+    let issue: string | undefined;
+    if (known && stored && rowFingerprint && stored !== rowFingerprint) {
+      status = 'changed_since_sync';
+      issue = 'Already imported, but the Sheet has changed since. Not re-imported.';
+      changedSinceSync.push({ groupNumber: row.groupNumber, row: row.row });
+    } else if (known) {
+      status = 'already_synced';
+      issue = 'Already imported.';
+    }
+
+    groups.push({
+      row: row.row,
+      groupNumber: row.groupNumber,
+      productName: row.input.productName,
+      category: row.input.ideaSlug,
+      status,
+      ...(issue ? { issue } : {}),
+    });
+  }
+
+  for (const duplicate of parsed.duplicateGroups) {
+    groups.push({
+      row: duplicate.rows[0]!,
+      groupNumber: duplicate.groupNumber,
+      productName: '—',
+      category: '—',
+      status: 'duplicate',
+      issue: `Duplicate Group Number found on rows ${duplicate.rows.join(' and ')}. Neither row was imported.`,
+    });
+  }
+
+  for (const issue of parsed.invalid) {
+    groups.push({
+      row: issue.row,
+      groupNumber: issue.groupNumber ?? 0,
+      productName: '—',
+      category: '—',
+      status: 'blocked',
+      issue: `${issue.field} — ${issue.reason}`,
+    });
+  }
+
+  groups.sort((a, b) => a.row - b.row || a.groupNumber - b.groupNumber);
+  void duplicatedGroups;
+
   const report: SyncReport = {
     ...base,
+    groups,
+    changedSinceSync,
+    fingerprint: fingerprintRows(parsed.valid),
     judgeCohortId: mapped?.id ?? null,
     rowsRead: parsed.rowsRead,
     blankRowsIgnored: parsed.blankRowsIgnored,
@@ -158,6 +305,22 @@ export async function syncSheet(options: SyncOptions): Promise<SyncReport> {
    * would act on.
    */
   if (options.dryRun) return report;
+
+  /*
+   * The sheet must still be what the operator looked at.
+   *
+   * Sync re-read and re-parsed above, so this compares the live sheet against
+   * the fingerprint shown at dry run. A mismatch means the counts on screen no
+   * longer describe reality — the operator is asked to look again rather than
+   * importing something they never reviewed.
+   */
+  if (options.expectedFingerprint && options.expectedFingerprint !== report.fingerprint) {
+    return {
+      ...report,
+      fatalError:
+        'The Sheet has changed since the last Dry Run. Run Dry Run again and review the new results before syncing.',
+    };
+  }
 
   const synced = await options.store.partner.syncCohort({
     externalCohortId: options.externalCohortId,

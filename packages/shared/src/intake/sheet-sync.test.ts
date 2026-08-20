@@ -420,3 +420,159 @@ describe('the Google client', () => {
     expect(Object.keys(source).sort()).toEqual(['describe', 'read']);
   });
 });
+
+describe('the dry-run fingerprint', () => {
+  it('stays the same when nothing judging-relevant changed', async () => {
+    /*
+     * An operator reads a dry run and then decides to sync. Cosmetic edits in
+     * between — a corrected team member name, a reordered column — must not
+     * invalidate that decision, or the button would never be pressable on a
+     * sheet people are still touching.
+     */
+    const a = await run(fakeSource(sheetRows()), true);
+    const b = await run(fakeSource(sheetRows([{ 'Team Members': 'Someone Else Entirely' }])), true);
+
+    expect(b.fingerprint).toBe(a.fingerprint);
+  });
+
+  it('changes when something judging-relevant changed', async () => {
+    const a = await run(fakeSource(sheetRows()), true);
+    const b = await run(
+      fakeSource(sheetRows([{ 'MVP/Product Link': 'https://different.example.com' }])),
+      true,
+    );
+
+    expect(b.fingerprint).not.toBe(a.fingerprint);
+  });
+
+  it('refuses a sync when the sheet moved under the operator', async () => {
+    /*
+     * The failure this prevents: a dry run showing 118 submissions, followed by
+     * a sync importing something else, with nobody the wiser until the scores
+     * came out.
+     */
+    const preview = await run(fakeSource(sheetRows()), true);
+
+    const result = await syncSheet({
+      store,
+      source: fakeSource(sheetRows([{ 'Main User Action': 'Something completely different now.' }])),
+      externalCohortId: COHORT,
+      cohortName: 'AIAP Cohort 13',
+      dryRun: false,
+      expectedFingerprint: preview.fingerprint,
+    });
+
+    expect(result.fatalError).toMatch(/changed since the last dry run/i);
+    expect(result.newSubmissions).toBe(0);
+
+    const { rows } = await db.query<{ n: string }>('select count(*) n from submissions');
+    expect(Number(rows[0]!.n)).toBe(0);
+  });
+
+  it('proceeds when the sheet still matches', async () => {
+    const preview = await run(fakeSource(sheetRows()), true);
+    const result = await syncSheet({
+      store,
+      source: fakeSource(sheetRows()),
+      externalCohortId: COHORT,
+      cohortName: 'AIAP Cohort 13',
+      dryRun: false,
+      expectedFingerprint: preview.fingerprint,
+    });
+
+    expect(result.fatalError).toBeUndefined();
+    expect(result.newSubmissions).toBe(1);
+  });
+});
+
+describe('a group whose sheet row changed after it was imported', () => {
+  it('is reported rather than silently re-imported', async () => {
+    /*
+     * Replacing an assessment because somebody edited a cell afterwards changes
+     * a team's score. That is a decision for a human, not a side effect of
+     * pressing import again.
+     */
+    await run(fakeSource(sheetRows()), false);
+
+    const after = await run(
+      fakeSource(sheetRows([{ 'Product Name': 'SpendWise, actually renamed' }])),
+      true,
+    );
+
+    expect(after.changedSinceSync).toEqual([{ groupNumber: 12, row: 2 }]);
+    const group = after.groups.find((g) => g.groupNumber === 12)!;
+    expect(group.status).toBe('changed_since_sync');
+    expect(group.issue).toMatch(/not re-imported/i);
+  });
+
+  it('reports an unchanged imported group as simply already imported', async () => {
+    await run(fakeSource(sheetRows()), false);
+    const after = await run(fakeSource(sheetRows()), true);
+
+    expect(after.changedSinceSync).toEqual([]);
+    expect(after.groups.find((g) => g.groupNumber === 12)!.status).toBe('already_synced');
+  });
+
+  it('does not overwrite the stored submission when re-synced', async () => {
+    await run(fakeSource(sheetRows()), false);
+    await run(fakeSource(sheetRows([{ 'Product Name': 'Renamed after import' }])), false);
+
+    const { rows } = await db.query<{ product_name: string; n: string }>(
+      'select product_name, (select count(*) from submissions)::text n from submissions',
+    );
+    expect(rows[0]!.product_name).toBe('SpendWise');
+    expect(Number(rows[0]!.n)).toBe(1);
+  });
+});
+
+describe('the operator table', () => {
+  it('marks each group with something a non-technical person can act on', async () => {
+    const report = await run(
+      fakeSource(
+        sheetRows([
+          {},
+          { 'Group Number': '14', 'MVP/Product Link': '' },
+          { 'Group Number': '21', Access: 'Specific Login', 'Login Password': '', 'Login Email': 'a@b.invalid' },
+        ]),
+      ),
+      true,
+    );
+
+    const blocked = report.groups.filter((g) => g.status === 'blocked');
+    expect(blocked.some((g) => g.issue?.includes('MVP/Product Link'))).toBe(true);
+    expect(blocked.some((g) => g.issue?.includes('Login Password'))).toBe(true);
+    expect(report.groups.some((g) => g.status === 'ready')).toBe(true);
+  });
+
+  it('shows a duplicate group naming both rows', async () => {
+    const report = await run(fakeSource(sheetRows([{}, {}])), true);
+    const duplicate = report.groups.find((g) => g.status === 'duplicate')!;
+
+    expect(duplicate.issue).toMatch(/rows 2 and 3/);
+    expect(duplicate.issue).toMatch(/neither row was imported/i);
+  });
+
+  it('renders no credential and no learner PII', async () => {
+    /*
+     * This table goes on a screen in a room with other people in it. Nothing on
+     * it should be a password, an email or a team member's name.
+     */
+    const report = await run(
+      fakeSource(
+        sheetRows([
+          {
+            Access: 'Specific Login',
+            'Login Email': 'judge@example.invalid',
+            'Login Password': 'hunter2-secret',
+          },
+        ]),
+      ),
+      true,
+    );
+    const serialised = JSON.stringify(report.groups);
+
+    for (const forbidden of ['hunter2-secret', 'judge@example.invalid', 'Priya', 'Rahul', 'priya@example.invalid']) {
+      expect(serialised, forbidden).not.toContain(forbidden);
+    }
+  });
+});
