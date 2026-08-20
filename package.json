@@ -22,6 +22,7 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "seed:demo": "tsx scripts/seed-demo.ts",
+    "db:bootstrap": "tsx scripts/bootstrap-production.ts",
     "gen:deck": "tsx scripts/generate-internal-deck.ts",
     "verify": "npm run lint && npm run typecheck && npm run test && npm run build",
     "test:concurrency": "node scripts/test-concurrency.mjs",

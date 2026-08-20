@@ -30,16 +30,33 @@ alter table browser_test_runs
   add column if not exists attempt integer not null default 1;
 
 /*
- * Existing rows predate the model, so they are marked attempt 0.
+ * Existing rows predate the model, so they are numbered at or below zero.
  *
  * Not 1: guessing that old rows belong to the current attempt would make a
  * historical run look authoritative, which is the exact confusion this
- * migration exists to remove. Zero never equals a live `attempt_count`, which
- * starts at 1, so nothing already recorded is read as current — and all of it
- * remains visible to the admin submission view, which has always queried these
- * tables directly.
+ * migration exists to remove. A live `attempt_count` starts at 1, so nothing
+ * already recorded can be read as current — and all of it stays visible to the
+ * admin submission view, which has always queried these tables directly.
+ *
+ * Numbered rather than flattened to a single 0, because a job that was ever
+ * re-run already holds more than one row per viewport. A blanket zero would
+ * make those collide under the unique index below, and the migration would fail
+ * on exactly the databases that have the most history. Found that way: this
+ * refused to apply to production, where six job/viewport pairs held two runs
+ * each from re-judged submissions.
+ *
+ * The newest historical run gets 0 and each older one counts downwards, so the
+ * ordering still reads correctly and no row is deleted to make an index fit.
  */
-update browser_test_runs set attempt = 0 where attempt = 1;
+with numbered as (
+  select id,
+         -(row_number() over (partition by job_id, viewport order by started_at desc) - 1) as attempt
+    from browser_test_runs
+)
+update browser_test_runs r
+   set attempt = numbered.attempt
+  from numbered
+ where numbered.id = r.id;
 
 -- One run per viewport per attempt. This is what makes a restart within an
 -- attempt an upsert rather than a duplicate: the second execution collides with

@@ -273,3 +273,66 @@ describe('scoring and ranking', () => {
     expect(Number(rows[0]!.n)).toBe(1);
   });
 });
+
+describe('migrating a database that already has repeat runs', () => {
+  it('numbers historical runs so none of them collide', async () => {
+    /*
+     * The migration failed against production the first time it was run. Jobs
+     * that had been re-judged already held two runs per viewport, and marking
+     * every historical row `attempt = 0` made them duplicates under the unique
+     * index — so the databases with the most history were exactly the ones that
+     * could not be migrated.
+     *
+     * This asserts the shape the migration now produces: every historical run
+     * kept, each with its own number, all at or below zero so none can ever be
+     * mistaken for the current attempt.
+     */
+    await claim();
+    await saveRun('desktop', 1);
+    await saveRun('mobile', 1);
+
+    /*
+     * Rewind to the pre-migration state. The index has to come off first — its
+     * absence is precisely the condition the backfill runs under.
+     */
+    await db.query(`drop index if exists browser_test_runs_job_attempt_viewport`);
+    await db.query(`update browser_test_runs set attempt = 0`);
+    await db.query(
+      `insert into browser_test_runs
+         (job_id, attempt, viewport, started_at, finished_at, duration_ms, status,
+          browser_version, console_error_count, network_failure_count,
+          a11y_violation_count, a11y_summary, cleanup_status, timed_out)
+       select job_id, 0, viewport, started_at - interval '1 hour', finished_at, duration_ms, status,
+              browser_version, console_error_count, network_failure_count,
+              a11y_violation_count, a11y_summary, cleanup_status, timed_out
+         from browser_test_runs`,
+    );
+
+    // The migration's backfill, applied to that state.
+    await db.query(
+      `with numbered as (
+         select id, -(row_number() over (partition by job_id, viewport order by started_at desc) - 1) as attempt
+           from browser_test_runs
+       )
+       update browser_test_runs r set attempt = numbered.attempt
+         from numbered where numbered.id = r.id`,
+    );
+
+    // The index the migration then creates. If the backfill left a collision,
+    // this throws — which is exactly how production refused the first attempt.
+    await db.query(
+      `create unique index browser_test_runs_job_attempt_viewport
+         on browser_test_runs (job_id, attempt, viewport)`,
+    );
+
+    const after = await db.query<{ job_id: string; viewport: string; attempt: number }>(
+      'select job_id, viewport, attempt from browser_test_runs',
+    );
+    // Four rows, all preserved, and every (job, viewport, attempt) distinct.
+    expect(after.rows).toHaveLength(4);
+    const keys = after.rows.map((r) => `${r.job_id}|${r.viewport}|${r.attempt}`);
+    expect(new Set(keys).size).toBe(keys.length);
+    // And none can be mistaken for a live attempt, which starts at 1.
+    expect(after.rows.every((r) => r.attempt <= 0)).toBe(true);
+  });
+});
