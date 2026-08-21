@@ -584,6 +584,18 @@ export interface AssessmentStore extends EvidenceStore, JudgingInputStore {
 
   raiseManualReview(flag: Omit<ManualReviewFlag, 'id' | 'createdAt'>): Promise<ManualReviewFlag>;
   resolveManualReview(flagId: string, resolution: { status: 'resolved' | 'dismissed'; note: string; actor: string }): Promise<void>;
+  /**
+   * Retire the flags a previous judging attempt raised.
+   *
+   * A flag saying the browser never reached the product describes one attempt.
+   * When a later attempt succeeds it is no longer true, and leaving it open
+   * sends a reviewer to look at a problem that has already gone away.
+   *
+   * Only flags this system raised are retired. A human's decision is not an
+   * observation that can go stale, and re-judging must never quietly undo one.
+   * Nothing is deleted: the flag is marked resolved and stays in history.
+   */
+  supersedeSystemManualReview(submissionId: string, note: string): Promise<number>;
   listManualReviewFlags(cohortId: string): Promise<(ManualReviewFlag & { groupNumber: number })[]>;
 
   proposeDisqualification(input: Omit<Disqualification, 'id' | 'createdAt' | 'updatedAt'>): Promise<Disqualification>;

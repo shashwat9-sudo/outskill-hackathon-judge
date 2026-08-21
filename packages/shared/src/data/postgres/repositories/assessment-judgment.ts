@@ -48,6 +48,7 @@ export type JudgmentMethods = Pick<
   | 'getFeedbackReport'
   | 'raiseManualReview'
   | 'resolveManualReview'
+  | 'supersedeSystemManualReview'
   | 'listManualReviewFlags'
   | 'proposeDisqualification'
   | 'confirmDisqualification'
@@ -66,6 +67,28 @@ export function buildJudgmentMethods(db: SqlDatabase): JudgmentMethods {
      * crash between them would leave a scored job with no evidence, which reads
      * as "scored on nothing".
      */
+    async supersedeSystemManualReview(submissionId, note) {
+      /*
+       * `raised_by = 'system'` is the whole distinction.
+       *
+       * System flags are observations from one attempt and are recomputed by
+       * the next. An admin flag is a decision, and a decision does not expire
+       * because a machine ran again.
+       */
+      const { rowCount } = await db.query(
+        `update manual_review_flags
+            set status = 'resolved',
+                resolved_by = 'system',
+                resolved_at = now(),
+                resolution_note = $2
+          where submission_id = $1
+            and status = 'open'
+            and raised_by = 'system'`,
+        [submissionId, note],
+      );
+      return rowCount ?? 0;
+    },
+
     async saveEvidence(jobId, evidence) {
       await db.transaction(async (tx) => {
         await tx.query('delete from assessment_evidence where job_id = $1', [jobId]);

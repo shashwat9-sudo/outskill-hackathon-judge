@@ -269,6 +269,30 @@ async function preflightStage(job: AssessmentJob, ctx: StageContext): Promise<St
       : {},
   );
 
+  /*
+   * A fresh attempt starts with a clean slate of system observations.
+   *
+   * Preflight is the first stage of any attempt, so this is where the previous
+   * one's findings stop applying. A flag saying the browser never reached the
+   * product describes an attempt that is over; leaving it open after a
+   * successful re-judge sends a reviewer to a problem that has already gone.
+   *
+   * Only this system's own flags are retired, and only by being marked
+   * resolved — the history stays. An administrator's flag is a decision, not an
+   * observation, and re-running a job must never quietly undo one.
+   */
+  const superseded = await ctx.store.assessment.supersedeSystemManualReview(
+    job.submissionId,
+    `Superseded by judging attempt ${job.attemptCount + 1}.`,
+  );
+  if (superseded > 0) {
+    ctx.log.info('Retired flags from a previous attempt', {
+      submissionId: job.submissionId,
+      count: superseded,
+      attempt: job.attemptCount + 1,
+    });
+  }
+
   await ctx.store.assessment.recordPreflight(job.id, outcome.checks);
 
   if (outcome.needsManualReview) {
@@ -291,6 +315,51 @@ async function preflightStage(job: AssessmentJob, ctx: StageContext): Promise<St
     if (outcome.looksLikeOutage && job.attemptCount + 1 < job.maxAttempts) {
       throw new Error('Product was unreachable; classified as a possible outage and will be retried.');
     }
+
+    /*
+     * Out of retries, and the product still is not answering.
+     *
+     * This used to end as `failed`, which removed the team from consideration
+     * for something that may have lasted minutes: a deployment asleep, a free
+     * tier throttling, a DNS record propagating. Worse, a failed job carries no
+     * flag, so the submission simply vanished from the review queue and nobody
+     * would have known to look.
+     *
+     * It goes to a human instead, carrying the diagnostic. No browser evidence
+     * is invented and nothing is scored on behaviour we never observed — the
+     * assessment records that we could not see the product, which is the honest
+     * outcome and leaves the decision where it belongs.
+     *
+     * A malformed URL or a blocked address is not this: those stay as they
+     * were, because they are the submission being wrong or a rule being
+     * enforced, not a site that happened to be down.
+     */
+    if (outcome.unreachable) {
+      const failing = outcome.checks.find(
+        (c) => c.status === 'fail' && (c.checkKey === 'http_reachable' || c.checkKey === 'dns_resolves'),
+      );
+      const reason = failing?.detail?.message ?? 'The product URL did not respond.';
+
+      await ctx.store.assessment.raiseManualReview({
+        submissionId: job.submissionId,
+        reasonCode: 'product_unreachable',
+        detail:
+          `The product could not be reached after ${job.attemptCount + 1} attempt(s): ` +
+          `${String(reason)} It has not been judged on product behaviour.`,
+        raisedBy: 'system',
+        status: 'open',
+        resolvedBy: null,
+        resolvedAt: null,
+        resolutionNote: null,
+      });
+
+      ctx.log.warn('Product unreachable — routing to manual review', {
+        submissionId: job.submissionId,
+        attempts: job.attemptCount + 1,
+      });
+      return { stage: 'manual_review', error: 'The product could not be reached.' };
+    }
+
     return { stage: 'failed', error: 'Preflight could not confirm the product is reachable.' };
   }
 

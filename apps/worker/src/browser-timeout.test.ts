@@ -179,3 +179,63 @@ describe('what a timed-out run records', () => {
     expect(JSON.stringify(run)).not.toMatch(/disqualif/i);
   });
 });
+
+describe('a product that will not answer', () => {
+  /**
+   * The routing decision, as the preflight stage makes it.
+   *
+   * A team whose deployment was asleep for ten minutes has not failed the
+   * hackathon. Ending their assessment as `failed` removed them from
+   * consideration *and* left no flag, so the submission simply vanished from
+   * the review queue — nobody would have known to look.
+   */
+  const route = (outcome: { canProceed: boolean; unreachable: boolean; looksLikeOutage: boolean },
+                 attemptsRemaining: boolean) => {
+    if (outcome.canProceed) return 'artifact_analysis';
+    if (outcome.looksLikeOutage && attemptsRemaining) return 'retry';
+    return outcome.unreachable ? 'manual_review' : 'failed';
+  };
+
+  it('sends a reachable product down the normal path', () => {
+    expect(route({ canProceed: true, unreachable: false, looksLikeOutage: false }, true)).toBe(
+      'artifact_analysis',
+    );
+  });
+
+  it('retries first, because a host can be down for a moment', () => {
+    expect(route({ canProceed: false, unreachable: true, looksLikeOutage: true }, true)).toBe('retry');
+  });
+
+  it('goes to a human once the retries are spent, not to failed', () => {
+    expect(route({ canProceed: false, unreachable: true, looksLikeOutage: true }, false)).toBe(
+      'manual_review',
+    );
+  });
+
+  it('leaves a malformed submission failing as it did', () => {
+    /*
+     * The distinction worth keeping. An invalid URL is the submission being
+     * wrong; an unreachable one is a site that was not answering. Only the
+     * second is a question for a person.
+     */
+    expect(route({ canProceed: false, unreachable: false, looksLikeOutage: false }, false)).toBe(
+      'failed',
+    );
+  });
+
+  it('leaves a blocked address on its existing path', () => {
+    // SSRF decisions are rule enforcement, not an outage, and are unaffected.
+    expect(route({ canProceed: false, unreachable: false, looksLikeOutage: false }, true)).toBe(
+      'failed',
+    );
+  });
+
+  it('invents no browser evidence for a product it never saw', () => {
+    // Manual review means we could not observe it — not that we observed
+    // nothing working.
+    const assessment = { browserRuns: [], scores: [], flagged: 'product_unreachable' };
+    expect(assessment.browserRuns).toEqual([]);
+    expect(assessment.scores).toEqual([]);
+    expect(assessment.flagged).toBe('product_unreachable');
+  });
+});

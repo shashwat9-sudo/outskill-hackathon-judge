@@ -53,6 +53,16 @@ export interface PreflightOutcome {
   manualReviewReason: string | null;
   /** True when failures look like a transient outage rather than an absence. */
   looksLikeOutage: boolean;
+  /**
+   * The product itself could not be reached — DNS, refused, timed out, down.
+   *
+   * Deliberately separate from the other reasons preflight stops. A malformed
+   * URL is the submission being wrong and a blocked address is a rule being
+   * enforced; this is a site that was not answering when we happened to look.
+   * A team whose deployment was asleep at judging time has not failed the
+   * hackathon, so this routes to a human rather than ending the assessment.
+   */
+  unreachable: boolean;
 }
 
 /** DNS resolver injected for testability; production uses the real one. */
@@ -236,6 +246,16 @@ export async function runPreflight(
       // failure is retried and may simply be an outage.
       needsManualReview: !isDnsFailure,
       manualReviewReason: isDnsFailure ? null : (resolved.reason ?? 'Address is not publicly reachable.'),
+      /*
+       * A name that does not resolve is the product being unreachable, not the
+       * submission being wrong — a DNS record still propagating looks exactly
+       * like this. It is retried first, and if it never answers it goes to a
+       * human rather than ending the assessment.
+       *
+       * A blocked address is emphatically not this. That is the SSRF rule doing
+       * its job, and it keeps the path it always had.
+       */
+      unreachable: isDnsFailure,
     });
   }
 
@@ -247,7 +267,12 @@ export async function runPreflight(
   const probe = await probeUrl(validation.normalised as string, doFetch, timeoutMs, 'GET');
   if (!probe.ok) {
     record('http_reachable', 'fail', { message: probe.detail }, probe.failureClass);
-    return finish(checks, { canProceed: false, needsManualReview: false, manualReviewReason: null });
+    return finish(checks, {
+      canProceed: false,
+      needsManualReview: false,
+      manualReviewReason: null,
+      unreachable: true,
+    });
   }
 
   record('http_reachable', 'pass', {
@@ -281,7 +306,12 @@ export async function runPreflight(
 
 function finish(
   checks: PreflightCheckResult[],
-  outcome: { canProceed: boolean; needsManualReview: boolean; manualReviewReason: string | null },
+  outcome: {
+    canProceed: boolean;
+    needsManualReview: boolean;
+    manualReviewReason: string | null;
+    unreachable?: boolean;
+  },
 ): PreflightOutcome {
   const failures = checks.filter((c) => c.status === 'fail');
   // Timeout, DNS and server-error failures are all consistent with a host being
@@ -290,7 +320,7 @@ function finish(
   const looksLikeOutage =
     failures.length > 0 && failures.every((c) => outageClasses.includes(c.failureClass));
 
-  return { checks, looksLikeOutage, ...outcome };
+  return { checks, looksLikeOutage, unreachable: false, ...outcome };
 }
 
 // --------------------------------------------------------------------------

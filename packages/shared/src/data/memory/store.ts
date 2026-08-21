@@ -2199,6 +2199,23 @@ export class MemoryDataStore implements DataStore {
         });
       },
 
+      supersedeSystemManualReview: async (submissionId, note) => {
+        await this.ready;
+        // Same rule as production: system observations are retired by a newer
+        // attempt, a human's decision is not.
+        let n = 0;
+        for (const flag of this.db.manualReviewFlags) {
+          if (flag.submissionId !== submissionId) continue;
+          if (flag.status !== 'open' || flag.raisedBy !== 'system') continue;
+          flag.status = 'resolved';
+          flag.resolvedBy = 'system';
+          flag.resolvedAt = new Date();
+          flag.resolutionNote = note;
+          n += 1;
+        }
+        return n;
+      },
+
       getQueueStats: async (cohortId) => this.computeQueueStats(cohortId),
     };
   }

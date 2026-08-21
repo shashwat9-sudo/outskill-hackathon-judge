@@ -64,7 +64,7 @@ describe('the assessment repository', () => {
     const own = await declaredMethods('AssessmentStore');
     const inherited = await declaredMethods('EvidenceStore', './repositories/evidence.ts');
 
-    expect(own).toHaveLength(35);
+    expect(own).toHaveLength(36);
     // Evidence upload lives in its own file because it is the one part of the
     // assessment surface that needs a Storage credential.
     expect(inherited).toEqual([
