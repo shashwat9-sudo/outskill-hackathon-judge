@@ -639,3 +639,42 @@ describe('the operator table', () => {
     }
   });
 });
+
+describe('the judging configuration a synced cohort gets', () => {
+  it('carries a usable browser budget, not an empty object', async () => {
+    /*
+     * This was a production-day defect waiting to happen. A cohort created
+     * through the partner path had `assessment_config = {}`, so
+     * `browserBudgetMs` was undefined; undefined arithmetic gives NaN, and
+     * `setTimeout(fn, NaN)` fires after 1ms. Every browser run was therefore
+     * abandoned the instant it began and every submission went to manual
+     * review — which reads as "the browser is broken" and was a missing default.
+     */
+    const synced = await store.partner!.syncCohort({
+      externalCohortId: 'CONFIG-CHECK',
+      name: 'Config check',
+    });
+
+    const { rows } = await db.query<{ config: { browserBudgetMs?: number } }>(
+      'select assessment_config as config from cohorts where id = $1',
+      [synced.cohortId],
+    );
+    const config = rows[0]!.config;
+
+    expect(Number.isFinite(config.browserBudgetMs)).toBe(true);
+    expect(config.browserBudgetMs).toBeGreaterThan(0);
+    // Arithmetic on it must stay a number — this is what NaN broke.
+    expect(Number.isFinite(Math.floor((config.browserBudgetMs ?? NaN) * 0.8))).toBe(true);
+  });
+
+  it('gives the same defaults to every cohort it creates', async () => {
+    const a = await store.partner!.syncCohort({ externalCohortId: 'CFG-A', name: 'A' });
+    const b = await store.partner!.syncCohort({ externalCohortId: 'CFG-B', name: 'B' });
+
+    const { rows } = await db.query<{ config: unknown }>(
+      'select assessment_config as config from cohorts where id = any($1::uuid[])',
+      [[a.cohortId, b.cohortId]],
+    );
+    expect(JSON.stringify(rows[0]!.config)).toBe(JSON.stringify(rows[1]!.config));
+  });
+});

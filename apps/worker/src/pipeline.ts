@@ -508,7 +508,16 @@ async function browserTestingStage(job: AssessmentJob, ctx: StageContext): Promi
       executed: steps.length,
     });
   }
-  const budgetMs = detail.cohort.assessmentConfig.browserBudgetMs;
+  /*
+   * A budget we can actually count with.
+   *
+   * `Number.isFinite` rather than `??`: a cohort with no configuration yields
+   * undefined, and undefined arithmetic gives NaN, which `setTimeout` treats as
+   * 1ms — so a missing default did not slow runs down, it abandoned them
+   * instantly and sent every submission to manual review.
+   */
+  const configuredBudget = detail.cohort.assessmentConfig?.browserBudgetMs;
+  const budgetMs = Number.isFinite(configuredBudget) ? Number(configuredBudget) : 480_000;
 
   /*
    * The stage always ends.

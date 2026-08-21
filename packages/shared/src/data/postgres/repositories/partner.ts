@@ -1,4 +1,5 @@
 import type { SqlDatabase } from '../client';
+import { DEFAULT_ASSESSMENT_CONFIG } from '../../types';
 import { encryptSecret, parseEncryptionKey, serialiseEnvelope } from '../../../security/crypto';
 import { RUBRIC_CATEGORIES, RUBRIC_VERSION } from '../../../rubric/index';
 
@@ -219,11 +220,11 @@ export function buildPartnerStore(
         const { rows } = await tx.query<{ id: string }>(
           `insert into cohorts
              (name, code, external_cohort_id, day12_start_at, day13_deadline_at,
-              shortlist_target, rubric_version_id, status)
+              shortlist_target, rubric_version_id, status, assessment_config)
            values ($1,$2,$3,
                    coalesce($4, now()),
                    coalesce($5, now() + interval '2 days'),
-                   coalesce($6, 10), $7, 'closed')
+                   coalesce($6, 10), $7, 'closed', $8::jsonb)
            returning id`,
           [
             input.name,
@@ -233,6 +234,12 @@ export function buildPartnerStore(
             input.day13DeadlineAt ? new Date(input.day13DeadlineAt) : null,
             input.shortlistTarget ?? null,
             rubric[0].id,
+            /*
+             * The judging defaults. The internal product has no opinion about
+             * browser budgets, so leaving this empty meant an undefined budget
+             * reached a timer as NaN and abandoned every run instantly.
+             */
+            JSON.stringify(DEFAULT_ASSESSMENT_CONFIG),
           ],
         );
 

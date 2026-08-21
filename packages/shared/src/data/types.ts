@@ -92,6 +92,28 @@ export interface Cohort {
   updatedAt: Date;
 }
 
+/**
+ * What a cohort is judged with when nobody has said otherwise.
+ *
+ * A cohort created through the partner path carries no configuration of its
+ * own — the internal product has no opinion about browser budgets — and an
+ * empty object meant `browserBudgetMs` was undefined. That reached a
+ * `setTimeout` as NaN, which fires immediately, so every run was abandoned the
+ * instant it started and every submission went to manual review. It looked like
+ * a browser fault and was a missing default.
+ */
+export const DEFAULT_ASSESSMENT_CONFIG: AssessmentConfig = {
+  workerConcurrency: 1,
+  browserBudgetMs: 480_000,
+  maxAttempts: 3,
+  retryBackoffMs: 60_000,
+  gracePeriodMs: 3_600_000,
+  consistencyTopN: 20,
+  lowConfidenceThreshold: 0.6,
+  modelVersion: 'gemini',
+  promptVersion: 'assessment-prompts-v2',
+};
+
 export interface AssessmentConfig {
   workerConcurrency: number;
   browserBudgetMs: number;
