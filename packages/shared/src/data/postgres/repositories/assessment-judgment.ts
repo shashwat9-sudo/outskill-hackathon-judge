@@ -543,7 +543,22 @@ function clampConfidence(value: number): number {
   return Math.min(1, Math.max(0, value));
 }
 
-function mapEvidence(row: Record<string, unknown>): AssessmentEvidence {
+/*
+ * These four are exported because the admin submission detail reads the same
+ * four tables and must read them the same way.
+ *
+ * It did not. `loadAssessmentSections` mapped those rows with the generic
+ * `mapRows`, which renames columns and stops there — so every `numeric` column
+ * arrived in the admin page as the string Postgres sends. `total_score` was
+ * "56.00" rather than 56, and the scores tab, which calls `.toFixed(2)` on it,
+ * threw `toFixed is not a function` and took down the whole page as a
+ * client-side exception.
+ *
+ * Two readers of one table, only one of which knew the shape. Exporting the
+ * mapper is the fix rather than adding a second coercion beside the first,
+ * because a second one drifts.
+ */
+export function mapEvidence(row: Record<string, unknown>): AssessmentEvidence {
   return {
     ...mapRow<AssessmentEvidence>(row),
     sourceRef: parseJson(row.source_ref, {}),
@@ -552,7 +567,7 @@ function mapEvidence(row: Record<string, unknown>): AssessmentEvidence {
   };
 }
 
-function mapScore(row: Record<string, unknown>): CategoryScore {
+export function mapScore(row: Record<string, unknown>): CategoryScore {
   return {
     ...mapRow<CategoryScore>(row),
     rawScore: toNumber(row.raw_score),
@@ -569,7 +584,7 @@ function mapScore(row: Record<string, unknown>): CategoryScore {
   };
 }
 
-function mapSummary(row: Record<string, unknown>): AssessmentSummary {
+export function mapSummary(row: Record<string, unknown>): AssessmentSummary {
   return {
     ...mapRow<AssessmentSummary>(row),
     totalScore: toNumber(row.total_score),
@@ -583,7 +598,7 @@ function mapSummary(row: Record<string, unknown>): AssessmentSummary {
   };
 }
 
-function mapConsistencyReview(row: Record<string, unknown>): ConsistencyReview {
+export function mapConsistencyReview(row: Record<string, unknown>): ConsistencyReview {
   return {
     ...mapRow<ConsistencyReview>(row),
     triggerReason: (row.trigger_reason as ConsistencyReview['triggerReason']) ?? [],
@@ -594,7 +609,7 @@ function mapConsistencyReview(row: Record<string, unknown>): ConsistencyReview {
   };
 }
 
-function mapFeedback(row: Record<string, unknown>): FeedbackReport {
+export function mapFeedback(row: Record<string, unknown>): FeedbackReport {
   return {
     ...mapRow<FeedbackReport>(row),
     strengths: parseJson(row.strengths, []),

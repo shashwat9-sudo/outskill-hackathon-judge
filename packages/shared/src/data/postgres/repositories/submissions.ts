@@ -24,6 +24,13 @@ import type { SubmissionListItem, SubmissionStore } from '../../store';
 import { RowNotFoundError, type SqlDatabase } from '../client';
 import { ARTIFACT_NUMERIC_COLUMNS, json, mapMaybe, mapRow, mapRows, mapRowsWithNumbers, parseJson, toNumber } from '../rows';
 import { deserialiseEnvelope, decryptSecret, parseEncryptionKey } from '../../../security/crypto';
+import {
+  mapConsistencyReview,
+  mapEvidence,
+  mapFeedback,
+  mapScore,
+  mapSummary,
+} from './assessment-judgment';
 import { loadCohort } from './participant';
 import { SUBMISSION_COLUMNS, SUBMISSION_RETURNING, mapSubmission } from './submission-shared';
 
@@ -472,7 +479,7 @@ async function loadAssessmentSections(
       consistencyReviews: [],
       manualReviewFlags: mapRows(flags.rows),
       disqualifications: mapRows(disqualifications.rows),
-      feedbackReport: mapMaybe(feedback.rows),
+      feedbackReport: feedback.rows[0] ? mapFeedback(feedback.rows[0]) : null,
       rank: rankRow ? toNumber(rankRow.rank) : null,
       inShortlist: Boolean(rankRow?.in_shortlist),
     };
@@ -512,13 +519,23 @@ async function loadAssessmentSections(
     artifactAnalysis: mapMaybe(analysis.rows),
     testPlan: planRow ? { ...planRow, steps: mapRows(planSteps.rows) } : null,
     browserRuns,
-    evidence: mapRows(evidence.rows),
-    scores: mapRows(scores.rows),
-    summary: mapMaybe(summary.rows),
-    consistencyReviews: mapRows(reviews.rows),
+    /*
+     * Mapped by the same functions the worker reads these tables with.
+     *
+     * `mapRows` renames columns and does nothing else, so every `numeric`
+     * column arrived here as the string Postgres sends — `total_score` as
+     * "56.00" rather than 56. The scores tab calls `.toFixed(2)` on those, and
+     * a string has no `toFixed`, so opening that tab threw and Next replaced
+     * the entire page with "a client-side exception has occurred". Every
+     * completed submission was affected; nothing about the data was unusual.
+     */
+    evidence: evidence.rows.map(mapEvidence),
+    scores: scores.rows.map(mapScore),
+    summary: summary.rows[0] ? mapSummary(summary.rows[0]) : null,
+    consistencyReviews: reviews.rows.map(mapConsistencyReview),
     manualReviewFlags: mapRows(flags.rows),
     disqualifications: mapRows(disqualifications.rows),
-    feedbackReport: mapMaybe(feedback.rows),
+    feedbackReport: feedback.rows[0] ? mapFeedback(feedback.rows[0]) : null,
     rank: rankRow ? toNumber(rankRow.rank) : null,
     inShortlist: Boolean(rankRow?.in_shortlist),
   };

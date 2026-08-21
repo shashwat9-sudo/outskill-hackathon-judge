@@ -532,7 +532,17 @@ function PreflightTab({ detail }: { detail: AdminSubmissionDetail }) {
                 </Badge>
               </Td>
               <Td className="text-muted">{check.failureClass === 'none' ? '—' : check.failureClass}</Td>
-              <Td className="text-muted">{String((check.detail as { message?: string }).message ?? '')}</Td>
+              {/*
+                * Optional chaining because the cast is a claim, not a check.
+                * `detail` is jsonb and NOT NULL, but jsonb NOT NULL still
+                * permits the JSON value `null`, which arrives here as JS null
+                * — and dereferencing it would replace the whole page with a
+                * client-side exception, exactly as `.toFixed` on a string did.
+                * An unreadable cell should cost the cell, not the page.
+                */}
+              <Td className="text-muted">
+                {String((check.detail as { message?: string } | null)?.message ?? '')}
+              </Td>
             </tr>
           ))}
         </tbody>
@@ -669,7 +679,7 @@ function EvidenceTab({ detail }: { detail: AdminSubmissionDetail }) {
                   </Td>
                   <Td className="text-right font-mono text-xs">{step.durationMs}ms</Td>
                   <Td className="text-muted">
-                    {String((step.assertionDetail as { detail?: string }).detail ?? '')}
+                    {String((step.assertionDetail as { detail?: string } | null)?.detail ?? '')}
                     {step.screenshotPath && (
                       /*
                        * A link, not the path.
