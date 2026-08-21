@@ -293,6 +293,20 @@ export interface Submission {
   excludedFeatures: string | null;
 
   productUrl: string | null;
+  /**
+   * Supporting evidence, as links rather than uploads.
+   *
+   * The Hackathon product asks for a Loom and a deck as URLs; the Judge never
+   * receives files from a learner. `submission_artifacts` still exists and
+   * still holds decks uploaded through the older path, so both are read
+   * wherever evidence is resolved — a link here and a stored PDF there mean
+   * the same thing to everything downstream.
+   *
+   * Neither is required. They are supporting evidence for scoring, not a
+   * precondition for judging a product that is sitting there working.
+   */
+  loomUrl: string | null;
+  deckUrl: string | null;
   loginRequired: boolean;
   coreTestSteps: { action: string; expectedResult: string }[];
   safeSampleInputs: string | null;

@@ -82,6 +82,30 @@ Access, Brief Description, Main User Action, How AI Helps, What We Got Working.
 Loom and deck are supporting evidence — their absence is a scoring outcome, not
 an intake failure.
 
+### What happens to the Loom and deck links
+
+Both are stored on the submission (`submissions.loom_url`, `submissions.deck_url`)
+and read by the worker directly. **Nothing is uploaded into the Judge.** The
+older `submission_artifacts` upload path still works and still wins where a
+stored PDF exists, but no sheet submission has one.
+
+The deck link is fetched during artifact analysis so its text can be read. A
+Google Drive share URL is translated to Drive's download endpoint first — the
+URL a team pastes is a viewer page, and requesting it returns HTML rather than
+a document. Google Slides links are exported as PDF. **The service account is
+not used**: this is an anonymous fetch over the ordinary egress rules, so the
+deck must be shared as *anyone with the link*. A deck that is not returns
+"could not be accessed", never "no deck was submitted".
+
+Learner-supplied links get the same SSRF treatment as the product URL, and
+every redirect hop is resolved and checked on its own — Drive always redirects,
+so a single check on the first URL would prove nothing about where the request
+lands.
+
+Neither link can stop a judging run. A missing or unreachable deck or Loom is
+recorded as a warning and priced into the deck-and-demo score; a product that is
+deployed and working is judged on the product.
+
 ### The three learner questions
 
 | Question | Feeds |

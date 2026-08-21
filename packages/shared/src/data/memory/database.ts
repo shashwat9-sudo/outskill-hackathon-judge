@@ -559,6 +559,8 @@ function buildSubmission(input: {
       input.seedScenario === 'manual_review'
         ? `https://apps.example.com/listing/group-${input.groupNumber}`
         : demoProductUrl(input.ideaSlug, input.groupNumber),
+    loomUrl: null,
+    deckUrl: null,
     loginRequired: input.seedScenario === 'login_required',
     coreTestSteps: incomplete ? [] : text.testSteps.map((s) => ({ ...s })),
     safeSampleInputs: incomplete ? null : text.sampleInputs,

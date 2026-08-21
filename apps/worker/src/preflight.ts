@@ -13,6 +13,7 @@
 import { lookup } from 'node:dns/promises';
 import {
   assertResolvedAddressesSafe,
+  resolveEvidenceLink,
   validateProductUrl,
   validateUrl,
   type FailureClass,
@@ -22,7 +23,16 @@ import {
 export interface PreflightInput {
   submissionId: string;
   productUrl: string | null;
+  /** Loom or other demo-video link, from the submission or a stored artifact. */
   demoVideoUrl: string | null;
+  /**
+   * Deck link, as the team supplied it — usually a Google Drive share URL.
+   *
+   * Distinct from `hasDeckPdf`, which means a PDF was uploaded through the
+   * older artifact path and is already in storage. A submission may have
+   * either, both or neither.
+   */
+  deckUrl: string | null;
   hasDeckPdf: boolean;
   deckReadable: boolean;
   deckPageCount: number | null;
@@ -146,33 +156,83 @@ export async function runPreflight(
 
   // ---- Deck and demo -----------------------------------------------------
 
-  record(
-    'deck_readable',
-    input.hasDeckPdf ? (input.deckReadable ? 'pass' : 'warn') : 'fail',
-    {
-      message: !input.hasDeckPdf
-        ? 'No PDF pitch deck was uploaded.'
-        : input.deckReadable
-          ? `PDF parsed: ${input.deckPageCount ?? 'unknown'} pages, text extracted.`
-          : `PDF parsed: ${input.deckPageCount ?? 'unknown'} pages, but no text could be extracted — the deck is likely image-based.`,
-    },
-    input.hasDeckPdf ? 'none' : 'invalid',
-  );
+  /*
+   * Neither of these can stop a judging run.
+   *
+   * A deck and a Loom are supporting evidence: they inform the deck/demo
+   * category and give the written submission something to be checked against.
+   * A product that is deployed and working has not failed the hackathon
+   * because a share link is set to the wrong audience, and no hackathon rule
+   * says otherwise — so absence and inaccessibility are recorded as warnings
+   * and priced into scoring, never used to end an assessment.
+   *
+   * They are also deliberately not failures for a second reason. `finish`
+   * decides whether a set of failures looks like an outage by requiring every
+   * one of them to be outage-shaped, so a `fail` here for a missing deck would
+   * have made a genuinely unreachable product ineligible for the retry that
+   * exists precisely for it.
+   */
+  const probeEvidence = async (url: string, label: string) => {
+    const link = resolveEvidenceLink(url);
+    if (!link) {
+      return { ok: false, detail: `${label} is not a usable http(s) link.`, status: 0 };
+    }
+    /*
+     * Learner-supplied links get the same egress treatment as the product URL.
+     * This is a URL a stranger typed into a form, and fetching it from inside
+     * our network without resolving it first is exactly the request-forgery
+     * path the product URL is guarded against.
+     */
+    if (!controlledRun) {
+      const check = validateUrl(link.fetchUrl, { requireHttps: false, allowPrivateAddress: false });
+      if (!check.ok) {
+        return { ok: false, detail: check.message ?? `${label} is not a usable URL.`, status: 0 };
+      }
+      const safe = await assertResolvedAddressesSafe(new URL(link.fetchUrl).hostname, resolver);
+      if (!safe.safe) {
+        return { ok: false, detail: safe.reason ?? 'Address is not publicly reachable.', status: 0 };
+      }
+    }
+    const probe = await probeUrl(link.fetchUrl, doFetch, timeoutMs, 'HEAD');
+    return { ok: probe.ok, detail: probe.detail, status: probe.status };
+  };
+
+  if (input.hasDeckPdf) {
+    // A deck uploaded through the older artifact path is already in storage
+    // and has already been parsed; nothing to reach for.
+    record('deck_readable', input.deckReadable ? 'pass' : 'warn', {
+      message: input.deckReadable
+        ? `PDF parsed: ${input.deckPageCount ?? 'unknown'} pages, text extracted.`
+        : `PDF parsed: ${input.deckPageCount ?? 'unknown'} pages, but no text could be extracted — the deck is likely image-based.`,
+      source: 'uploaded',
+    });
+  } else if (input.deckUrl) {
+    const probe = await probeEvidence(input.deckUrl, 'The deck link');
+    record('deck_readable', probe.ok ? 'pass' : 'warn', {
+      message: probe.ok
+        ? `Deck link is reachable (${probe.status}). Contents are read during artifact analysis.`
+        : `A deck link was supplied but could not be accessed (${probe.detail}). Deck evidence is unavailable — this is not a missing deck.`,
+      source: 'link',
+      accessible: probe.ok,
+    });
+  } else {
+    record('deck_readable', 'warn', {
+      message: 'No pitch deck link was supplied. Deck evidence is unavailable; this affects the deck and demo score rather than blocking judging.',
+      source: 'none',
+    });
+  }
 
   if (!input.demoVideoUrl) {
-    record('demo_link_accessible', 'fail', { message: 'No demo video link was supplied.' }, 'invalid');
+    record('demo_link_accessible', 'warn', {
+      message: 'No demo video link was supplied. This affects the deck and demo score rather than blocking judging.',
+    });
   } else {
-    const probe = await probeUrl(input.demoVideoUrl, doFetch, timeoutMs, 'HEAD');
-    record(
-      'demo_link_accessible',
-      probe.ok ? 'pass' : 'warn',
-      {
-        message: probe.ok
-          ? `Demo link returned ${probe.status}.`
-          : `Demo link could not be verified (${probe.detail}). Video analysis will be marked limited rather than treated as a missing demo.`,
-      },
-      probe.ok ? 'none' : probe.failureClass,
-    );
+    const probe = await probeEvidence(input.demoVideoUrl, 'The demo link');
+    record('demo_link_accessible', probe.ok ? 'pass' : 'warn', {
+      message: probe.ok
+        ? `Demo link returned ${probe.status}.`
+        : `Demo link could not be verified (${probe.detail}). Video analysis will be marked limited rather than treated as a missing demo.`,
+    });
   }
 
   // ---- Credentials -------------------------------------------------------

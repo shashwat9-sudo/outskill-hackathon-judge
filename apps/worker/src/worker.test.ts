@@ -38,6 +38,7 @@ describe('preflight SSRF guard', () => {
   const base = {
     submissionId: 'sub-1',
     demoVideoUrl: 'https://www.loom.com/share/abc',
+    deckUrl: null,
     hasDeckPdf: true,
     deckReadable: true,
     deckPageCount: 8,

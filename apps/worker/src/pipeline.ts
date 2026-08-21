@@ -46,6 +46,7 @@ import {
   type AiClient,
 } from '@ohj/ai';
 import { runPreflight } from './preflight';
+import { fetchLinkedDeck } from './evidence-fetch';
 import { extractPdfText } from './pdf';
 import { runBrowserPlan, summariseRun, type BrowserRunResult } from './browser-runner';
 import type { EvidenceUploader } from './evidence-upload';
@@ -248,11 +249,24 @@ async function preflightStage(job: AssessmentJob, ctx: StageContext): Promise<St
   const video = detail.artifacts.find((a) => a.kind === 'demo_video');
   const credentials = await ctx.store.submissions.getCredentials(job.submissionId);
 
+  /*
+   * Supporting evidence can arrive two ways and both are current.
+   *
+   * A submission from the Hackathon product carries a Loom link and a deck
+   * link on the submission itself; one made through the older upload path has
+   * `submission_artifacts` rows instead. Reading only the artifacts — which is
+   * what this did — meant every sheet-ingested team was reported as having
+   * supplied no deck and no demo while both links sat in their submission row.
+   */
+  const demoVideoUrl = detail.submission.loomUrl ?? video?.externalUrl ?? null;
+  const deckUrl = detail.submission.deckUrl ?? null;
+
   const outcome = await runPreflight(
     {
     submissionId: job.submissionId,
     productUrl: detail.submission.productUrl,
-    demoVideoUrl: video?.externalUrl ?? null,
+    demoVideoUrl,
+    deckUrl,
     hasDeckPdf: Boolean(deck),
     deckReadable: Boolean(deck),
     deckPageCount: null,
@@ -378,17 +392,56 @@ async function artifactAnalysisStage(job: AssessmentJob, ctx: StageContext): Pro
   guardDispatch(job, detail.cohort, ctx);
   const deck = detail.artifacts.find((a) => a.kind === 'deck_pdf');
   const video = detail.artifacts.find((a) => a.kind === 'demo_video');
+  const demoVideoUrl = detail.submission.loomUrl ?? video?.externalUrl ?? null;
 
-  const deckExtraction = deck?.storagePath
+  /*
+   * An uploaded deck is bytes we already hold; a linked deck has to be
+   * fetched. Storage wins where both exist, because it needs no network and
+   * cannot have had its sharing settings changed since submission.
+   *
+   * When a linked deck cannot be read, the reason is carried forward rather
+   * than discarded. "The file is not shared publicly" and "no deck was
+   * submitted" are different findings about a team, and only one of them is
+   * about the deck being absent.
+   */
+  let deckExtraction = deck?.storagePath
     ? await extractPdfText(deck.storagePath).catch(() => null)
     : null;
+  let deckUnavailableReason: string | null = null;
+
+  if (!deckExtraction && detail.submission.deckUrl) {
+    const fetched = await fetchLinkedDeck(detail.submission.deckUrl);
+    if (fetched.ok) {
+      deckExtraction = await extractPdfText(fetched.bytes).catch(() => null);
+      if (!deckExtraction) {
+        deckUnavailableReason = 'The linked deck was downloaded but could not be parsed as a PDF.';
+      }
+    } else {
+      deckUnavailableReason = fetched.reason;
+    }
+  } else if (!deckExtraction && !deck) {
+    deckUnavailableReason = 'No pitch deck was supplied.';
+  }
+
+  /*
+   * The durable record of why a deck was unreadable is the `deck_readable`
+   * preflight check, which an admin can see against the submission. This is
+   * the operator's copy — enough to tell "nobody shared the file" apart from
+   * "our egress refused the host" without opening the database.
+   */
+  if (deckUnavailableReason) {
+    ctx.log.info('No deck text available for analysis', {
+      submissionId: job.submissionId,
+      reason: deckUnavailableReason,
+    });
+  }
 
   // Video is not fetched or transcribed in Version 1. Being explicit beats
   // inventing content (ADR-015).
-  const videoAnalysisLimited = !video?.externalUrl || video.isAccessible === false;
-  const videoLimitationReason = !video?.externalUrl
+  const videoAnalysisLimited = !demoVideoUrl || video?.isAccessible === false;
+  const videoLimitationReason = !demoVideoUrl
     ? 'No demo video link was supplied.'
-    : video.isAccessible === false
+    : video?.isAccessible === false
       ? 'The demo link could not be retrieved. No video content has been inferred.'
       : 'Video content is not analysed in this version. No video content has been inferred.';
 

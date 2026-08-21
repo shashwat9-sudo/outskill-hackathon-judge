@@ -20,6 +20,7 @@ export * from './domain/cohort-exclusivity';
 export * from './domain/cohort-deletion';
 export * from './domain/missing-items';
 export * from './domain/evidence-path';
+export * from './domain/evidence-links';
 export * from './utils/learner-sheet';
 export * from './intake/sheet-rows';
 export * from './intake/sheet-sync';

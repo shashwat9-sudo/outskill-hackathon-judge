@@ -2462,6 +2462,8 @@ export class MemoryDataStore implements DataStore {
       shouldHaveFeatures: [],
       excludedFeatures: null,
       productUrl: null,
+      loomUrl: null,
+      deckUrl: null,
       loginRequired: false,
       coreTestSteps: [],
       safeSampleInputs: null,
