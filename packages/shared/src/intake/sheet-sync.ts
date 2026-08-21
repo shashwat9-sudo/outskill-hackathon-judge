@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { DataStore } from '../data/store';
 import { parseCsv } from '../utils/csv';
+import { APPROVED_IDEA_LABELS } from '../fixtures/ideas';
 import {
   SHEET_SOURCE,
   parseSheetRows,
@@ -193,18 +194,26 @@ export async function syncSheet(options: SyncOptions): Promise<SyncReport> {
   }
 
   /*
-   * The approved ideas come from the cohort that is already mapped, when there
-   * is one. On a first run there is not, so the categories are read from
-   * whichever cohort the sync is about to create — which means a first dry run
-   * cannot validate categories and says so rather than pretending to.
+   * The eight approved ideas are a fact about the hackathon, not about a row.
+   *
+   * These used to be read from the mapped Judge cohort. A cohort is only
+   * created by the first Import, so the first Preview an operator ever runs
+   * found an empty list and rejected every category — including all eight valid
+   * ones. A legitimate "Recipe Sharing App" submission was blocked by the Judge
+   * not yet knowing what an idea was.
+   *
+   * The canonical list is used unless the mapped cohort has its own catalogue,
+   * which lets a cohort keep ideas that were customised for it while making the
+   * common case correct before anything exists.
    */
   const cohorts = await options.store.cohorts.listCohorts();
   const mapped = cohorts.find(
     (c) => (c as { externalCohortId?: string }).externalCohortId === options.externalCohortId,
   );
-  const approvedCategories = mapped
+  const cohortIdeas = mapped
     ? (await options.store.cohorts.listIdeas(mapped.id)).map((i) => ({ slug: i.slug, title: i.title }))
     : [];
+  const approvedCategories = cohortIdeas.length > 0 ? cohortIdeas : [...APPROVED_IDEA_LABELS];
 
   const parsed: ParsedIntakeSheet = parseSheetRows(rows, { approvedCategories });
 

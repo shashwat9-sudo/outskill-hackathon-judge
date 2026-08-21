@@ -15,7 +15,7 @@
  * genuine ones.
  */
 
-import type { SqlDatabase } from './client';
+import type { SqlClient, SqlDatabase } from './client';
 import { RUBRIC_CATEGORIES, RUBRIC_VERSION } from '../../rubric/index';
 import { IDEA_SEEDS } from '../../fixtures/ideas';
 import { hashPassword } from '../../security/password';
@@ -166,7 +166,12 @@ export async function bootstrapProduction(
  * approved catalogue, but the expanded judging fields are Outskill's
  * interpretation and must be read by a human before they judge anyone (ADR-025).
  */
-export async function seedIdeaCatalogue(db: SqlDatabase, cohortId: string): Promise<number> {
+export async function seedIdeaCatalogue(
+  // `SqlClient`, not `SqlDatabase`: this only issues queries, and taking the
+  // narrower type lets it run inside a transaction as well as outside one.
+  db: SqlClient,
+  cohortId: string,
+): Promise<number> {
   let created = 0;
   for (const seed of IDEA_SEEDS) {
     const inserted = await db.query(

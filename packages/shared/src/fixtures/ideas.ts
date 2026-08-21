@@ -222,3 +222,21 @@ export const IDEA_SEEDS: readonly IdeaSeed[] = [
     displayOrder: 8,
   },
 ] as const;
+
+
+/**
+ * The approved ideas, as intake needs to see them.
+ *
+ * Derived from `IDEA_SEEDS` rather than written out again, so there is one list
+ * and it cannot drift. Intake validates a sheet's Category against this instead
+ * of against whatever a particular cohort happens to hold — the eight ideas are
+ * a fact about the hackathon, not about a database row.
+ *
+ * That distinction is the bug this exists to close. Categories used to be read
+ * from the mapped Judge cohort, and a cohort is only created by the first
+ * Import — so the first Preview an operator ever runs had an empty list and
+ * rejected all eight valid categories at once.
+ */
+export const APPROVED_IDEA_LABELS: readonly { slug: string; title: string }[] = IDEA_SEEDS.map(
+  (idea) => ({ slug: idea.slug, title: idea.title }),
+);

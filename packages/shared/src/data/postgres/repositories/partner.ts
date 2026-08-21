@@ -1,5 +1,6 @@
 import type { SqlDatabase } from '../client';
 import { DEFAULT_ASSESSMENT_CONFIG } from '../../types';
+import { seedIdeaCatalogue } from '../bootstrap';
 import { encryptSecret, parseEncryptionKey, serialiseEnvelope } from '../../../security/crypto';
 import { RUBRIC_CATEGORIES, RUBRIC_VERSION } from '../../../rubric/index';
 
@@ -242,6 +243,16 @@ export function buildPartnerStore(
             JSON.stringify(DEFAULT_ASSESSMENT_CONFIG),
           ],
         );
+
+        /*
+         * Seed the approved ideas with the cohort.
+         *
+         * Without this a synced cohort had no catalogue, so a submission could
+         * pass Preview against the canonical list and then fail to link to an
+         * idea once the cohort existed. Ops should never have to populate this
+         * by hand for a cohort the integration created.
+         */
+        await seedIdeaCatalogue(tx, rows[0]!.id);
 
         return {
           ok: true,

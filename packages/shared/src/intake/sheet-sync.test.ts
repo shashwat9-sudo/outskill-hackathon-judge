@@ -678,3 +678,43 @@ describe('the judging configuration a synced cohort gets', () => {
     expect(JSON.stringify(rows[0]!.config)).toBe(JSON.stringify(rows[1]!.config));
   });
 });
+
+describe('the idea catalogue a cohort is given', () => {
+  it('is seeded when the integration creates the cohort', async () => {
+    /*
+     * Without this a synced cohort had no ideas, so a submission could pass
+     * Preview against the canonical list and then fail to link to an idea once
+     * the cohort existed. Ops should never populate this by hand for a cohort
+     * the integration made.
+     */
+    const synced = await store.partner!.syncCohort({
+      externalCohortId: 'IDEAS-CHECK',
+      name: 'Ideas check',
+    });
+
+    const ideas = await store.cohorts.listIdeas(synced.cohortId!);
+    expect(ideas).toHaveLength(8);
+    expect(ideas.map((i) => i.slug)).toContain('recipe-sharing-app');
+  });
+
+  it('lets a first Preview validate categories before any cohort exists', async () => {
+    /*
+     * The bug that blocked the first two real submissions. Categories were read
+     * from the mapped Judge cohort, and a cohort is only created by the first
+     * Import — so the very first Preview found an empty list and rejected all
+     * eight valid categories at once.
+     */
+    const rows = sheetRows([{ Category: 'Recipe Sharing App', 'Product Name': 'Sizzle' }]);
+    const report = await syncSheet({
+      store,
+      source: fakeSource(rows),
+      // A cohort identifier that has never been synced.
+      externalCohortId: 'NEVER-SYNCED-YET',
+      cohortName: 'Not yet created',
+      dryRun: true,
+    });
+
+    expect(report.validRows).toBe(1);
+    expect(report.errors.filter((e) => e.field === 'Category')).toHaveLength(0);
+  });
+});

@@ -175,7 +175,31 @@ export interface ParsedIntakeSheet {
   fatalError?: string;
 }
 
-const OPEN_ACCESS = new Set(['open', 'open access', 'openaccess', 'public', 'no login', 'none']);
+/*
+ * What the submission product actually writes, alongside our canonical labels.
+ *
+ * The Judge was only accepting its own vocabulary. The upstream form presents
+ * "Open (any account works)" and "Requires shared credentials" to learners, and
+ * every real submission arrived carrying those — so the first two production
+ * rows were both rejected for an Access value that was entirely correct.
+ *
+ * Enumerated rather than matched loosely. Access decides whether a browser is
+ * sent at a login wall with no credentials, and a fuzzy rule that reads
+ * "requires shared credentials" correctly today will read something else
+ * correctly-looking tomorrow. New wording gets added here deliberately.
+ */
+const OPEN_ACCESS = new Set([
+  'open',
+  'open access',
+  'openaccess',
+  'public',
+  'no login',
+  'none',
+  // As written by the submission product.
+  'open any account works',
+  'open any account',
+  'anyone can access',
+]);
 const SPECIFIC_LOGIN = new Set([
   'specific login',
   'login',
@@ -183,6 +207,10 @@ const SPECIFIC_LOGIN = new Set([
   'credentials',
   'requires login',
   'login required',
+  // As written by the submission product.
+  'requires shared credentials',
+  'shared credentials',
+  'requires credentials',
 ]);
 
 /**
