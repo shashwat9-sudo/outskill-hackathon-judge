@@ -215,6 +215,44 @@ async function main(): Promise<void> {
     demoMode: env.DEMO_MODE,
   });
 
+  const startedAt = new Date();
+
+  /*
+   * Tell the admin application what this worker is.
+   *
+   * It cannot work this out for itself. Judging runs here, with this
+   * environment, on this host; the web tier has no AI configuration and needs
+   * none, so anything it said about judging was previously inferred from
+   * variables that describe a process which does not judge. That is how a
+   * cohort being judged against real Gemini came to be captioned "Demo
+   * fixtures — no AI provider".
+   *
+   * Configuration only. The API key is never sent, in any form.
+   */
+  const reportStatus = async () => {
+    try {
+      await store.workers.report({
+        workerId,
+        aiProvider: env.AI_PROVIDER,
+        aiModel: env.AI_MODEL ?? null,
+        evaluationMode: env.AI_EVALUATION_MODE,
+        demoMode: env.DEMO_MODE,
+        concurrency: env.WORKER_CONCURRENCY,
+        driver: store.driver,
+        startedAt,
+      });
+    } catch (error) {
+      // A caption is never worth stopping judging for.
+      log.warn('Could not report worker status', {
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+
+  await reportStatus();
+  let lastReportedAt = Date.now();
+  const REPORT_INTERVAL_MS = 60_000;
+
   let running = true;
 
   // Readiness is derived from the loop itself, not from a timer: a heartbeat
@@ -246,6 +284,14 @@ async function main(): Promise<void> {
   while (running) {
     try {
       heartbeat.lastIterationAt = new Date();
+
+      // Refreshed as the loop turns, so "last seen" describes a worker that is
+      // actually cycling rather than one whose process merely still exists.
+      if (Date.now() - lastReportedAt >= REPORT_INTERVAL_MS) {
+        await reportStatus();
+        lastReportedAt = Date.now();
+      }
+
       // Reclaim anything a crashed worker left leased before claiming new work.
       const reclaimed = await store.assessment.reclaimExpiredLeases();
       if (reclaimed > 0) log.warn('Reclaimed expired leases', { count: reclaimed });

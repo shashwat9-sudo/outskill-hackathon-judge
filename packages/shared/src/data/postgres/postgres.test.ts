@@ -78,7 +78,7 @@ describe('the schema this driver was written against', () => {
     const { rows } = await db.query<{ n: number }>(
       "select count(*)::int as n from pg_tables where schemaname = 'public'",
     );
-    expect(rows[0]?.n).toBe(38);
+    expect(rows[0]?.n).toBe(39);
   });
 
   it('has row-level security on every table', async () => {

@@ -101,18 +101,26 @@ export default async function JudgingPage() {
   const nothingStarted = stats.total > 0 && stats.byStage.queued === stats.total;
 
   /**
-   * What the AI configuration actually means for this operator.
+   * What judging is actually configured to do.
    *
-   * "A key exists" is the wrong question. What matters is whether pressing
-   * *Start judging* on this cohort will produce real results — and there are
-   * four different answers, which is why this is not a boolean.
+   * Read from the worker's own report, not from this application's environment.
+   * Judging does not run here — this tier never constructs an AI client and
+   * has no AI key, correctly — so `AI_PROVIDER` and `AI_API_KEY` as seen from
+   * here describe a process that does not judge anything. Reading them is how
+   * a cohort being judged against real Gemini came to be captioned "Demo
+   * fixtures — no AI provider".
+   *
+   * The local values are still passed for single-process demo mode, where
+   * there is no separate worker to hear from.
    */
+  const workers = await store.workers.list();
   const provider = describeProviderStatus({
     provider: env.AI_PROVIDER,
     model: env.AI_MODEL,
     hasApiKey: Boolean(env.AI_API_KEY),
     evaluationMode: env.AI_EVALUATION_MODE,
     demoMode: env.DEMO_MODE,
+    worker: workers[0] ?? null,
   });
   const resolved = stats.completed + stats.failed + stats.manualReview;
   const openFlags = flags.filter((f) => f.status === 'open');

@@ -113,6 +113,8 @@ import type {
   RankingStore,
   ResourceStore,
   SettingsStore,
+  WorkerStatus,
+  WorkerStatusStore,
   SubmissionListItem,
   SubmissionStore,
   LearnerAllocationResult,
@@ -172,6 +174,7 @@ export class MemoryDataStore implements DataStore {
   resources: ResourceStore;
   audit: AuditStore;
   settings: SettingsStore;
+  workers: WorkerStatusStore;
 
   constructor(options: { seed?: boolean; sessionSecret?: string } = {}) {
     this.db = createEmptyDatabase();
@@ -189,6 +192,7 @@ export class MemoryDataStore implements DataStore {
     this.resources = this.buildResourceStore();
     this.audit = this.buildAuditStore();
     this.settings = this.buildSettingsStore();
+    this.workers = this.buildWorkerStatusStore();
   }
 
   async reset(): Promise<void> {
@@ -2395,6 +2399,28 @@ export class MemoryDataStore implements DataStore {
             .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
             .slice(0, filter.limit ?? 200),
         ),
+    };
+  }
+
+  /**
+   * Demo mode has one worker: this process, pretending.
+   *
+   * Kept in memory rather than stubbed empty so the admin judging page renders
+   * the same way it does in production — an empty list there means "no worker
+   * has ever reported", which is a real and different state worth being able
+   * to see locally.
+   */
+  private buildWorkerStatusStore(): WorkerStatusStore {
+    const reported: WorkerStatus[] = [];
+    return {
+      report: async (status) => {
+        const existing = reported.findIndex((w) => w.workerId === status.workerId);
+        const row: WorkerStatus = { ...status, lastSeenAt: new Date() };
+        if (existing >= 0) reported[existing] = row;
+        else reported.push(row);
+      },
+      list: async () =>
+        clone(reported).sort((a, b) => b.lastSeenAt.getTime() - a.lastSeenAt.getTime()),
     };
   }
 

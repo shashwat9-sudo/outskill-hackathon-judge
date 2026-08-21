@@ -3,6 +3,7 @@ import {
   assertDispatchAllowed,
   canDispatchToProvider,
   describeProviderStatus,
+  type WorkerReport,
   EvaluationModeError,
   type DispatchSubject,
 } from './evaluation-mode';
@@ -112,57 +113,125 @@ describe('the guard the pipeline calls', () => {
 });
 
 describe('what the operator is shown', () => {
+  /**
+   * These describe the *worker*, because the worker is what judges.
+   *
+   * They used to describe the web application's own AI environment. That is
+   * not a weaker signal about judging, it is no signal: the web tier never
+   * constructs an AI client, and on a real deployment it holds no AI key at
+   * all — so the only states it could ever report were the two meaning
+   * "judging is not real". A production cohort being judged against real
+   * Gemini was captioned "Demo fixtures — no AI provider" while these tests
+   * passed.
+   */
+  const worker: WorkerReport = {
+    workerId: 'railway-judging-worker-1',
+    aiProvider: 'gemini',
+    aiModel: 'gemini-2.5-flash-lite',
+    evaluationMode: 'synthetic_only',
+    demoMode: false,
+    lastSeenAt: new Date('2026-08-21T12:00:00Z'),
+  };
+  const NOW = new Date('2026-08-21T12:01:00Z');
+
+  /** A web tier with no AI configuration of its own — the production shape. */
   const base = {
-    provider: 'gemini',
-    model: 'gemini-2.5-flash-lite',
-    hasApiKey: true,
+    provider: 'demo',
+    model: undefined,
+    hasApiKey: false,
     evaluationMode: 'synthetic_only' as const,
     demoMode: false,
+    now: NOW,
   };
 
-  it('distinguishes no provider from demo fixtures', () => {
+  const describe_ = (over: Partial<typeof worker> = {}) =>
+    describeProviderStatus({ ...base, worker: { ...worker, ...over } });
+
+  it('reports production judging even though this tier has no AI key', () => {
+    /*
+     * The exact production configuration. The web tier is `AI_PROVIDER=demo`
+     * with no key — which is correct, it needs none — and the worker is on
+     * Gemini in production mode. The old code read the former and called it
+     * demo fixtures.
+     */
+    const status = describe_({ evaluationMode: 'production' });
+
+    expect(status.readiness).toBe('production_judging');
+    expect(status.canJudgeRealCohort).toBe(true);
+    expect(status.label).not.toContain('Demo fixtures');
+  });
+
+  it('distinguishes no worker from demo fixtures', () => {
     // Different situations with different next steps. "AI not working" would
     // describe both and help with neither.
-    expect(describeProviderStatus({ ...base, demoMode: true }).readiness).toBe('demo_fixtures');
-    expect(describeProviderStatus({ ...base, hasApiKey: false }).readiness).toBe('no_provider');
+    expect(describe_({ demoMode: true }).readiness).toBe('demo_fixtures');
+    expect(describe_({ aiProvider: 'demo' }).readiness).toBe('demo_fixtures');
+    expect(describeProviderStatus({ ...base, worker: null }).readiness).toBe('no_worker');
   });
 
   it('distinguishes internal evaluation from production judging', () => {
-    expect(describeProviderStatus(base).readiness).toBe('synthetic_only');
-    expect(describeProviderStatus({ ...base, evaluationMode: 'production' }).readiness).toBe(
-      'production_judging',
-    );
+    expect(describe_().readiness).toBe('synthetic_only');
+    expect(describe_({ evaluationMode: 'production' }).readiness).toBe('production_judging');
   });
 
   it('recognises a local model', () => {
-    const status = describeProviderStatus({ ...base, provider: 'ollama', hasApiKey: false });
+    const status = describe_({ aiProvider: 'ollama', aiModel: 'llama3' });
     expect(status.readiness).toBe('local_model');
     expect(status.detail).toMatch(/nothing is charged/i);
   });
 
   it('never says a real cohort can be judged when it cannot', () => {
-    // The flag the "Start judging" control reads. A key existing is not the
-    // same as judging being safe.
-    expect(describeProviderStatus(base).canJudgeRealCohort).toBe(false);
-    expect(describeProviderStatus({ ...base, demoMode: true }).canJudgeRealCohort).toBe(false);
-    expect(describeProviderStatus({ ...base, hasApiKey: false }).canJudgeRealCohort).toBe(false);
-    expect(
-      describeProviderStatus({ ...base, evaluationMode: 'production' }).canJudgeRealCohort,
-    ).toBe(true);
+    // The flag the "Start judging" control reads.
+    expect(describe_().canJudgeRealCohort).toBe(false);
+    expect(describe_({ demoMode: true }).canJudgeRealCohort).toBe(false);
+    expect(describeProviderStatus({ ...base, worker: null }).canJudgeRealCohort).toBe(false);
+    expect(describe_({ evaluationMode: 'production' }).canJudgeRealCohort).toBe(true);
   });
 
   it('warns that production judging costs money', () => {
-    const status = describeProviderStatus({ ...base, evaluationMode: 'production' });
-    expect(status.detail).toMatch(/incur cost/i);
+    const status = describe_({ evaluationMode: 'production' });
+    expect(status.detail).toMatch(/incurs cost/i);
     expect(status.tone).toBe('warning');
   });
 
   it('names the model, so nobody has to guess which one is running', () => {
-    expect(describeProviderStatus(base).label).toContain('gemini-2.5-flash-lite');
+    expect(describe_().label).toContain('gemini-2.5-flash-lite');
   });
 
-  it('says submissions are safe when no provider is configured', () => {
-    const status = describeProviderStatus({ ...base, hasApiKey: false });
-    expect(status.detail).toMatch(/stored safely/i);
+  it('says submissions are safe when no worker has ever reported', () => {
+    const status = describeProviderStatus({ ...base, worker: null });
+    expect(status.detail).toMatch(/stay queued/i);
+  });
+
+  it('says so when a worker reported and then went quiet', () => {
+    /*
+     * Not the same as no worker, and not the same as a healthy one. This is
+     * the state where queued work silently stops moving, which is the failure
+     * an operator most needs to see before a deadline.
+     */
+    const status = describeProviderStatus({
+      ...base,
+      worker: { ...worker, evaluationMode: 'production', lastSeenAt: new Date('2026-08-21T11:00:00Z') },
+    });
+
+    expect(status.readiness).toBe('worker_stale');
+    expect(status.canJudgeRealCohort).toBe(false);
+    expect(status.detail).toMatch(/nothing is being judged/i);
+  });
+
+  it('does not call a busy worker missing', () => {
+    // Longer than a poll interval, shorter than one slow browser assessment.
+    const status = describeProviderStatus({
+      ...base,
+      worker: { ...worker, evaluationMode: 'production', lastSeenAt: new Date('2026-08-21T11:50:00Z') },
+    });
+
+    expect(status.readiness).toBe('production_judging');
+  });
+
+  it('still describes the local process in single-process demo mode', () => {
+    // No separate worker exists to report, so there is nothing else to read.
+    const status = describeProviderStatus({ ...base, demoMode: true, worker: null });
+    expect(status.readiness).toBe('demo_fixtures');
   });
 });

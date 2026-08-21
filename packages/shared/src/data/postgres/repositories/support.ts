@@ -9,7 +9,13 @@
  */
 
 import type { AuditLog, ResourceDocument, SystemSetting } from '../../types';
-import type { AuditStore, ResourceStore, SettingsStore } from '../../store';
+import type {
+  AuditStore,
+  ResourceStore,
+  SettingsStore,
+  WorkerStatus,
+  WorkerStatusStore,
+} from '../../store';
 import type { SqlClient, SqlDatabase } from '../client';
 import { RowNotFoundError } from '../client';
 import { ARTIFACT_NUMERIC_COLUMNS, json, mapRow, mapRowWithNumbers, mapRowsWithNumbers, parseJson } from '../rows';
@@ -62,6 +68,62 @@ export function buildAuditStore(db: SqlDatabase): AuditStore {
           before: parseJson<Record<string, unknown> | null>(entry.before, null),
           after: parseJson<Record<string, unknown> | null>(entry.after, null),
         };
+      });
+    },
+  };
+}
+
+/**
+ * What each judging worker reports about itself.
+ *
+ * The admin judging page used to describe the AI provider from the *web*
+ * tier's environment, which is not where judging happens — the web application
+ * never constructs an AI client. On a production deployment with no AI key of
+ * its own, the only states it could report were the two that say judging is not
+ * real, so a cohort being judged against real Gemini was captioned "Demo
+ * fixtures — no AI provider".
+ *
+ * The worker knows these things as facts. It writes them here, and the page
+ * reads what the worker said rather than inferring it from an unrelated
+ * environment.
+ */
+export function buildWorkerStatusStore(db: SqlDatabase): WorkerStatusStore {
+  return {
+    async report(status) {
+      await db.query(
+        `insert into worker_status
+           (worker_id, ai_provider, ai_model, evaluation_mode, demo_mode,
+            concurrency, driver, started_at, last_seen_at, updated_at)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, now(), now())
+         on conflict (worker_id) do update
+            set ai_provider = excluded.ai_provider,
+                ai_model = excluded.ai_model,
+                evaluation_mode = excluded.evaluation_mode,
+                demo_mode = excluded.demo_mode,
+                concurrency = excluded.concurrency,
+                driver = excluded.driver,
+                -- A restart is a new process, and the operator wants to see it.
+                started_at = excluded.started_at,
+                last_seen_at = now(),
+                updated_at = now()`,
+        [
+          status.workerId,
+          status.aiProvider,
+          status.aiModel,
+          status.evaluationMode,
+          status.demoMode,
+          status.concurrency,
+          status.driver,
+          status.startedAt,
+        ],
+      );
+    },
+
+    async list() {
+      const { rows } = await db.query('select * from worker_status order by last_seen_at desc');
+      return rows.map((row) => {
+        const status = mapRow<WorkerStatus>(row);
+        return { ...status, concurrency: Number(status.concurrency) };
       });
     },
   };

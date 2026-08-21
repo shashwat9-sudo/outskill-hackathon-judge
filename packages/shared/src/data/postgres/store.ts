@@ -18,7 +18,12 @@ import { buildAdminAuthStore, buildCohortStore } from './repositories/admin';
 import { buildParticipantStore } from './repositories/participant';
 import { buildSubmissionStore } from './repositories/submissions';
 import { buildTeamStore } from './repositories/teams';
-import { buildAuditStore, buildResourceStore, buildSettingsStore } from './repositories/support';
+import {
+  buildAuditStore,
+  buildResourceStore,
+  buildSettingsStore,
+  buildWorkerStatusStore,
+} from './repositories/support';
 import { buildAssessmentStore } from './repositories/assessment';
 import { buildPartnerStore } from './repositories/partner';
 import { buildRankingStore } from './repositories/ranking';
@@ -94,6 +99,7 @@ export function composePostgresDataStore(
     resources: buildResourceStore(db, storage),
     audit: buildAuditStore(db),
     settings: buildSettingsStore(db),
+    workers: buildWorkerStatusStore(db),
     partner: buildPartnerStore(db, {
       credentialKey: config.credentialKey,
       credentialKeyVersion: config.credentialKeyVersion,

@@ -668,6 +668,38 @@ export interface SettingsStore {
   set(key: string, value: unknown, actor: string): Promise<void>;
 }
 
+/**
+ * What a judging worker says about itself.
+ *
+ * Judging runs in a separate process on a separate host with its own
+ * environment. The web application has no AI configuration of its own — it
+ * never calls a provider — so anything it displayed about judging was
+ * previously a guess about a machine it cannot see. This is the worker's own
+ * account, written by the worker.
+ *
+ * Configuration facts only. No key, no key prefix, no learner data: this exists
+ * to render a caption, and a caption is not worth a place for a secret to leak
+ * into.
+ */
+export interface WorkerStatus {
+  workerId: string;
+  aiProvider: string;
+  aiModel: string | null;
+  evaluationMode: 'synthetic_only' | 'production';
+  demoMode: boolean;
+  concurrency: number;
+  driver: string;
+  startedAt: Date;
+  lastSeenAt: Date;
+}
+
+export interface WorkerStatusStore {
+  /** Called by the worker on boot and as it polls. Upserts its own row. */
+  report(status: Omit<WorkerStatus, 'lastSeenAt'>): Promise<void>;
+  /** Most recently seen first. Read by the admin judging page. */
+  list(): Promise<WorkerStatus[]>;
+}
+
 // --------------------------------------------------------------------------
 // Composite
 // --------------------------------------------------------------------------
@@ -690,6 +722,7 @@ export interface DataStore {
   resources: ResourceStore;
   audit: AuditStore;
   settings: SettingsStore;
+  workers: WorkerStatusStore;
   /**
    * Submissions arriving from the Outskill Hackathon product, and the results
    * it reads back. Absent on the memory driver, which has no partner.
