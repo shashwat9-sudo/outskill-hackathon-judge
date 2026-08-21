@@ -65,6 +65,64 @@ function knownNames(detail: { team: { leadName: string | null }; members: { full
 }
 
 
+/**
+ * The most browser steps one submission is worth executing.
+ *
+ * Chosen for a two-day beginner build judged from a normal user's point of
+ * view: enough to reach the main user action and look around, not enough for a
+ * long tail of waits on elements that were never there.
+ */
+const MAX_BROWSER_STEPS = 8;
+
+/**
+ * Slack between a run's own budget and the point the stage stops waiting.
+ *
+ * Long enough for an orderly shutdown — closing the browser, finishing a trace
+ * — to complete, so a healthy-but-slow run is not cut off mid-teardown.
+ */
+const STAGE_DEADLINE_GRACE_MS = 45_000;
+
+/** Stop waiting for a run, whatever it is doing. */
+function withStageDeadline<T>(work: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  return Promise.race([
+    work.finally(() => {
+      if (timer) clearTimeout(timer);
+    }),
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`The ${label} browser run did not finish within ${ms}ms.`)),
+        ms,
+      );
+    }),
+  ]);
+}
+
+/**
+ * What a run that never came back is recorded as.
+ *
+ * Empty rather than invented. A timeout means we did not observe the product,
+ * which is a reason for a human to look — not a reason to write down steps that
+ * never ran or evidence that does not exist.
+ */
+function timedOutRun(viewport: 'desktop' | 'mobile', reason: string): BrowserRunResult {
+  const now = new Date();
+  return {
+    viewport,
+    startedAt: now,
+    finishedAt: now,
+    durationMs: 0,
+    status: 'error',
+    browserVersion: 'unknown',
+    tracePath: null,
+    timedOut: true,
+    cleanupStatus: 'not_attempted',
+    steps: [],
+    observations: { consoleErrors: [], networkFailures: [], a11yViolations: [], createdValues: [] },
+    error: reason,
+  };
+}
+
 export interface StageContext {
   store: DataStore;
   ai: AiClient;
@@ -429,10 +487,58 @@ async function browserTestingStage(job: AssessmentJob, ctx: StageContext): Promi
   await mkdir(screenshotDir, { recursive: true });
   await mkdir(traceDir, { recursive: true });
 
-  const steps = plan.steps.map((s) => s.step);
+  /*
+   * How many browser steps a submission is worth.
+   *
+   * The model produced a twenty-one step plan for a page with one heading on
+   * it. Long plans are not more rigorous — they are mostly waits on elements
+   * that were never there, and each one spends budget that the main user
+   * action needed. This is a two-day hackathon build being checked by a normal
+   * user, not a regression suite.
+   *
+   * Steps come back in priority order, so taking the first N keeps the main
+   * user action and drops the tail. A cap is not a substitute for the deadline
+   * below; it is what stops the deadline being the normal way a run ends.
+   */
+  const allSteps = plan.steps.map((s) => s.step);
+  const steps = allSteps.slice(0, MAX_BROWSER_STEPS);
+  if (allSteps.length > MAX_BROWSER_STEPS) {
+    ctx.log.info('Test plan truncated', {
+      generated: allSteps.length,
+      executed: steps.length,
+    });
+  }
   const budgetMs = detail.cohort.assessmentConfig.browserBudgetMs;
 
-  const desktop = await runBrowserPlan({
+  /*
+   * The stage always ends.
+   *
+   * Everything inside the runner is bounded now, but "bounded" there means a
+   * race — the promise rejects while whatever it was waiting on may still be
+   * alive. This is the layer that does not care: if a run has not returned by
+   * its deadline, the stage stops waiting and reports a timeout, and the worker
+   * goes back to the queue.
+   *
+   * That distinction is the whole defect. With one worker, a stage that cannot
+   * end is not a slow submission — it is a cohort that never gets judged, and
+   * on the day it would have looked like nothing happening at all.
+   */
+  const boundedRun = async (
+    label: string,
+    run: Promise<BrowserRunResult>,
+    budgetMs: number,
+  ): Promise<BrowserRunResult> => {
+    try {
+      return await withStageDeadline(run, budgetMs + STAGE_DEADLINE_GRACE_MS, label);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : 'The browser run did not finish.';
+      ctx.log.warn('Browser run exceeded its deadline', { viewport: label, reason });
+      // An honest empty run: no fabricated steps, no invented evidence.
+      return timedOutRun(label as 'desktop' | 'mobile', reason);
+    }
+  };
+
+  const desktop = await boundedRun('desktop', runBrowserPlan({
     productUrl: detail.submission.productUrl,
     steps,
     credentials: credentials ? { username: credentials.username, password: credentials.password } : null,
@@ -445,10 +551,10 @@ async function browserTestingStage(job: AssessmentJob, ctx: StageContext): Promi
     // Only the controlled run sets this, and the executor ignores it outright
     // when NODE_ENV is 'production'.
     allowPrivateOriginForTesting: ctx.allowPrivateProductUrlForControlledRun === true,
-  });
+  }), Math.floor(budgetMs * 0.8));
   await persistRun(job.id, desktop, ctx);
 
-  const mobile = await runBrowserPlan({
+  const mobile = await boundedRun('mobile', runBrowserPlan({
     productUrl: detail.submission.productUrl,
     steps: steps.slice(0, 6),
     credentials: credentials ? { username: credentials.username, password: credentials.password } : null,
@@ -458,7 +564,7 @@ async function browserTestingStage(job: AssessmentJob, ctx: StageContext): Promi
     screenshotDir,
     traceDir: null,
     headless: ctx.env.BROWSER_HEADLESS,
-  });
+  }), Math.floor(budgetMs * 0.2));
   await persistRun(job.id, mobile, ctx);
 
   /**

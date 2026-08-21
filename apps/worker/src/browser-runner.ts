@@ -32,6 +32,45 @@ export interface BrowserRunOptions {
   allowPrivateOriginForTesting?: boolean;
 }
 
+/**
+ * How long past the run budget the browser is allowed to keep breathing.
+ *
+ * The budget is what the run is *given*; this is when we stop asking and start
+ * killing. A short grace lets an orderly shutdown finish first, so a trace that
+ * is nearly written still gets written.
+ */
+const HARD_KILL_GRACE_MS = 20_000;
+
+/** Setup and teardown steps that must not be allowed to hang forever. */
+const LAUNCH_TIMEOUT_MS = 60_000;
+const TEARDOWN_TIMEOUT_MS = 30_000;
+
+/**
+ * Await something, or give up.
+ *
+ * Used for the operations that sit outside the step loop — launching Chromium,
+ * opening a context, stopping a trace. The step loop bounds itself against the
+ * run deadline; these did not, and an unbounded await here is indistinguishable
+ * from a hung worker.
+ *
+ * This is a race, so the underlying operation may still be running afterwards.
+ * That is why it is not the only defence: the process kill below is what
+ * actually reclaims the resources.
+ */
+async function within<T>(label: string, ms: number, work: Promise<T>): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} did not finish within ${ms}ms.`)), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export interface BrowserRunResult {
   viewport: 'desktop' | 'mobile';
   status: 'passed' | 'partial' | 'failed' | 'error';
@@ -74,6 +113,8 @@ export async function runBrowserPlan(options: BrowserRunOptions): Promise<Browse
   let browserVersion = 'unknown';
   let tracePath: string | null = null;
   let proxy: EgressProxy | null = null;
+  let hardKill: NodeJS.Timeout | undefined;
+  let hardKilled = false;
 
   try {
     /*
@@ -88,11 +129,15 @@ export async function runBrowserPlan(options: BrowserRunOptions): Promise<Browse
      * it would mean judging a stranger's URL with nothing between their DNS and
      * our network.
      */
-    proxy = await createEgressProxy({
-      allowLoopbackForTesting: options.allowPrivateOriginForTesting === true,
-    });
+    proxy = await within(
+      'Starting the egress proxy',
+      LAUNCH_TIMEOUT_MS,
+      createEgressProxy({
+        allowLoopbackForTesting: options.allowPrivateOriginForTesting === true,
+      }),
+    );
 
-    browser = await chromium.launch({
+    browser = await within('Launching Chromium', LAUNCH_TIMEOUT_MS, chromium.launch({
       headless: options.headless,
       args: [
         '--disable-dev-shm-usage',
@@ -101,10 +146,35 @@ export async function runBrowserPlan(options: BrowserRunOptions): Promise<Browse
         '--disable-background-networking',
         ...egressProxyArgs(proxy),
       ],
-    });
+    }));
     browserVersion = `Chromium ${browser.version()}`;
 
-    context = await browser.newContext({
+    /*
+     * The one guarantee that does not depend on knowing where a hang is.
+     *
+     * Every timeout above is a race: the promise rejects, but whatever it was
+     * waiting on can still be alive and still holding the worker. Killing the
+     * browser process is different — every pending Playwright operation
+     * attached to it rejects at once, the awaits unwind, and the stage returns.
+     *
+     * This is armed the moment there is a process to kill and disarmed in the
+     * finally block, so a healthy run never reaches it. It exists because a
+     * stage that cannot end is worse than a stage that ends badly: with one
+     * worker, a single hung submission stops the whole cohort being judged.
+     */
+    hardKill = setTimeout(() => {
+      hardKilled = true;
+      /*
+       * Closing the browser rejects every pending Playwright operation attached
+       * to it, which is what unwinds a stalled step. Best effort: if the close
+       * itself hangs, the stage-level deadline in the pipeline still returns, so
+       * the worker is never held by this.
+       */
+      void browser?.close().catch(() => undefined);
+      void proxy?.close().catch(() => undefined);
+    }, options.budgetMs + HARD_KILL_GRACE_MS);
+
+    context = await within('Opening a browser context', LAUNCH_TIMEOUT_MS, browser.newContext({
       viewport: VIEWPORTS[options.viewport],
       ...(options.viewport === 'mobile'
         ? { userAgent: MOBILE_USER_AGENT, isMobile: true, hasTouch: true }
@@ -115,14 +185,18 @@ export async function runBrowserPlan(options: BrowserRunOptions): Promise<Browse
       // Fixed locale and timezone so runs are comparable between submissions.
       locale: 'en-GB',
       timezoneId: 'Asia/Kolkata',
-    });
+    }));
 
     if (options.traceDir) {
-      await context.tracing.start({ screenshots: true, snapshots: true, sources: false });
+      await within(
+        'Starting the trace',
+        TEARDOWN_TIMEOUT_MS,
+        context.tracing.start({ screenshots: true, snapshots: true, sources: false }),
+      );
       tracePath = `${options.traceDir}/${options.viewport}.zip`;
     }
 
-    const page = await context.newPage();
+    const page = await within('Opening a page', LAUNCH_TIMEOUT_MS, context.newPage());
     // The escape hatch is refused outright in production, regardless of caller.
     const allowPrivateOrigin =
       options.allowPrivateOriginForTesting === true && process.env.NODE_ENV !== 'production';
@@ -191,7 +265,7 @@ export async function runBrowserPlan(options: BrowserRunOptions): Promise<Browse
     observations = executor.results;
 
     if (options.traceDir && tracePath) {
-      await context.tracing.stop({ path: tracePath }).catch(() => {
+      await within('Stopping the trace', TEARDOWN_TIMEOUT_MS, context.tracing.stop({ path: tracePath })).catch(() => {
         tracePath = null;
       });
     }
@@ -201,6 +275,13 @@ export async function runBrowserPlan(options: BrowserRunOptions): Promise<Browse
     // Always tear down, even on a throw — a leaked context is a leaked browser
     // process holding an untrusted page open.
     await context?.close().catch(() => undefined);
+    // A healthy run disarms the hard kill before it ever fires.
+    if (hardKill) clearTimeout(hardKill);
+    if (hardKilled) {
+      timedOut = true;
+      error = error ?? 'The browser run was stopped after exceeding its time budget.';
+    }
+
     await browser?.close().catch(() => undefined);
     // The proxy outlives the browser only long enough to close cleanly.
     await proxy?.close().catch(() => undefined);
