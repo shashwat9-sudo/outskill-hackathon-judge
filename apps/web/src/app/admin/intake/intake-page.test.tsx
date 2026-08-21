@@ -82,7 +82,7 @@ const report = (over: Partial<SyncReport> = {}): SyncReport => ({
   blankRowsIgnored: 2,
   validRows: 3,
   invalidRows: 2,
-  duplicateGroups: [{ groupNumber: 33, rows: [42, 47] }],
+  resubmittedGroups: [{ groupNumber: 33, selectedRow: 47, supersededRows: [42] }],
   newSubmissions: 0,
   alreadyIngested: 0,
   jobsQueued: 0,
@@ -94,7 +94,7 @@ const report = (over: Partial<SyncReport> = {}): SyncReport => ({
     { row: 2, groupNumber: 12, productName: 'SpendWise', category: 'expense-tracker', status: 'ready' },
     { row: 3, groupNumber: 14, productName: '—', category: '—', status: 'blocked', issue: 'MVP/Product Link — Missing.' },
     { row: 4, groupNumber: 21, productName: '—', category: '—', status: 'blocked', issue: 'Login Password — Required when Access is "Specific Login".' },
-    { row: 42, groupNumber: 33, productName: '—', category: '—', status: 'duplicate', issue: 'Duplicate Group Number found on rows 42 and 47. Neither row was imported.' },
+    { row: 42, groupNumber: 33, productName: '—', category: '—', status: 'superseded', issue: 'Replaced by a later submission on row 47. Not imported.' },
   ],
   ...over,
 });
@@ -118,7 +118,7 @@ describe('after checking the sheet', () => {
     // "Ready to import" is both a stat label and a row badge, so both appear.
     expect((await screen.findAllByText('Ready to import')).length).toBeGreaterThan(0);
     expect(screen.getByText('Blocked')).toBeTruthy();
-    expect(screen.getByText('Duplicate groups')).toBeTruthy();
+    expect(screen.getByText('Resubmitted groups')).toBeTruthy();
     expect(screen.getByText('Blank rows skipped')).toBeTruthy();
   });
 
@@ -131,7 +131,7 @@ describe('after checking the sheet', () => {
 
     expect(await screen.findByText(/MVP\/Product Link — Missing/)).toBeTruthy();
     expect(screen.getByText(/Login Password — Required when Access is/)).toBeTruthy();
-    expect(screen.getByText(/Duplicate Group Number found on rows 42 and 47/)).toBeTruthy();
+    expect(screen.getByText(/Replaced by a later submission on row 47/)).toBeTruthy();
   });
 
   it('never renders a password or learner contact details', async () => {

@@ -54,7 +54,8 @@ export function IntakeControl({ config }: { config: IntakeConfig }) {
   // counted separately and shown, never quietly folded into "ready".
   const ready = report?.groups.filter((g) => g.status === 'ready').length ?? 0;
   const blocked = report?.groups.filter((g) => g.status === 'blocked').length ?? 0;
-  const duplicates = report?.duplicateGroups.length ?? 0;
+  const resubmitted = report?.resubmittedGroups.length ?? 0;
+  const superseded = report?.groups.filter((g) => g.status === 'superseded').length ?? 0;
   const alreadySynced = report?.groups.filter((g) => g.status === 'already_synced').length ?? 0;
   const changed = report?.changedSinceSync.length ?? 0;
 
@@ -200,12 +201,26 @@ export function IntakeControl({ config }: { config: IntakeConfig }) {
               <Stat label="Rows found" value={String(report.rowsRead)} />
               <Stat label="Ready to import" value={String(ready)} tone={ready > 0 ? 'accent' : 'default'} />
               <Stat label="Blocked" value={String(blocked)} tone={blocked > 0 ? 'attention' : 'default'} />
-              <Stat label="Duplicate groups" value={String(duplicates)} tone={duplicates > 0 ? 'attention' : 'default'} />
+              <Stat label="Resubmitted groups" value={String(resubmitted)} tone={resubmitted > 0 ? 'attention' : 'default'} />
               <Stat label="Already imported" value={String(alreadySynced)} />
+              <Stat label="Superseded rows" value={String(superseded)} />
               <Stat label="Changed since import" value={String(changed)} tone={changed > 0 ? 'attention' : 'default'} />
               <Stat label="Blank rows skipped" value={String(report.blankRowsIgnored)} />
               <Stat label="Jobs this would create" value={String(ready)} />
             </div>
+
+            {resubmitted > 0 && (
+              <Alert tone="info" title="Some groups submitted the form more than once" className="mt-4">
+                {report.resubmittedGroups.map((g) => {
+                  const rejected = g.newestRejected
+                    ? ` Their newest response (row ${g.newestRejected.row}) could not be used, so the last working one is being imported.`
+                    : '';
+                  return `Group ${g.groupNumber}: importing row ${g.selectedRow}${
+                    g.supersededRows.length ? `, replacing row ${g.supersededRows.join(' and ')}` : ''
+                  }.${rejected}`;
+                }).join(' ')}
+              </Alert>
+            )}
 
             {changed > 0 && (
               <Alert tone="warning" title="Some imported submissions have changed in the sheet" className="mt-4">
@@ -256,13 +271,16 @@ export function IntakeControl({ config }: { config: IntakeConfig }) {
               for <strong>{config.cohortName}</strong> and queue{' '}
               {ready === 1 ? 'a judging job' : `${ready} judging jobs`}.
             </p>
-            {(blocked > 0 || duplicates > 0) && (
+            {blocked > 0 && (
               <p className="mt-2 text-sm text-muted">
-                {blocked > 0 && <>{blocked} row{blocked === 1 ? '' : 's'} with problems </>}
-                {blocked > 0 && duplicates > 0 && 'and '}
-                {duplicates > 0 && <>{duplicates} duplicate group{duplicates === 1 ? '' : 's'} </>}
-                will <strong>not</strong> be imported. Fix them in the sheet and check again to
-                include them.
+                {blocked} row{blocked === 1 ? '' : 's'} with problems will <strong>not</strong> be
+                imported. Fix them in the sheet and check again to include them.
+              </p>
+            )}
+            {superseded > 0 && (
+              <p className="mt-2 text-sm text-muted">
+                {superseded} earlier response{superseded === 1 ? '' : 's'} from groups who
+                resubmitted will be skipped — only their latest working submission is judged.
               </p>
             )}
             <p className="mt-2 text-sm text-muted">
@@ -327,7 +345,7 @@ const STATUS_LABEL: Record<string, { label: string; tone: 'success' | 'warning' 
   ready: { label: 'Ready to import', tone: 'success' },
   already_synced: { label: 'Already imported', tone: 'neutral' },
   changed_since_sync: { label: 'Changed since import', tone: 'warning' },
-  duplicate: { label: 'Duplicate group', tone: 'warning' },
+  superseded: { label: 'Replaced by a later one', tone: 'neutral' },
   blocked: { label: 'Needs fixing', tone: 'danger' },
 };
 

@@ -80,6 +80,36 @@ export const REQUIRED_HEADERS = [
  */
 export const EXCLUDED_PII_HEADERS = ['Team Leader', 'Team Members', 'Primary Contact'] as const;
 
+/**
+ * Alternative spellings we will accept for a canonical column.
+ *
+ * Deliberately short. The production headers above are canonical, and every
+ * alias here is a rewording of the same question rather than a guess at what a
+ * column might mean — mapping an ambiguous column is how a product URL ends up
+ * being judged as a Loom link. Anything not listed fails closed.
+ */
+const HEADER_ALIASES: Record<string, readonly string[]> = {
+  'Group Number': ['Group', 'Group No', 'Group #', 'Team Number', 'Group Number '],
+  'MVP/Product Link': ['MVP Link', 'Product Link', 'MVP / Product Link', 'Product URL', 'MVP URL'],
+  Access: ['Access Type', 'Access Mode'],
+  'Login Email': ['Judge Login Email', 'Test Login Email', 'Username'],
+  'Login Password': ['Judge Login Password', 'Test Login Password'],
+  'Brief Description': ['Description', 'Short Description'],
+  'Main User Action': ['Main User Action ', 'Primary User Action', 'Main Thing A User Can Do'],
+  'How AI Helps': ['AI Value', 'How AI Is Used', 'How Does AI Help'],
+  'What We Got Working': ['What Got Working', 'What We Built', 'What Works'],
+  'Loom Video Link': ['Loom Link', 'Loom', 'Demo Video Link', 'Demo Link'],
+  'Final Deck Link': ['Deck Link', 'Deck', 'Final Deck', 'Presentation Link'],
+  Category: ['Idea', 'Selected Idea', 'Product Category'],
+  'Product Name': ['Name Of Product', 'App Name'],
+  Timestamp: ['Submitted At', 'Submission Time'],
+};
+
+/** Every accepted spelling of one canonical header, normalised. */
+export function headerCandidates(canonical: string): string[] {
+  return [canonical, ...(HEADER_ALIASES[canonical] ?? [])].map(normaliseHeader);
+}
+
 /** Lowercase, collapse whitespace, drop punctuation a human might vary. */
 export function normaliseHeader(header: string): string {
   return header
@@ -97,9 +127,28 @@ export interface SheetRowIssue {
   reason: string;
 }
 
+export interface ResubmittedGroup {
+  groupNumber: number;
+  /** The sheet row that will be judged. */
+  selectedRow: number;
+  /** Valid rows this one replaced. Kept for the report, never judged. */
+  supersededRows: number[];
+  /**
+   * Set when a newer row existed and could not be used.
+   *
+   * A later broken submission must not silently discard an earlier working one,
+   * so the older valid row is still judged and this says why the newer one was
+   * not — otherwise a team would be marked on a submission they had replaced,
+   * with nothing on screen explaining it.
+   */
+  newestRejected?: { row: number; reason: string };
+}
+
 export interface NormalisedRow {
   row: number;
   groupNumber: number;
+  /** Parsed Google Form timestamp, or null when absent/unreadable. */
+  submittedAt: Date | null;
   /** Everything judging needs. No PII, no password. */
   input: Omit<PartnerSubmissionInput, 'externalCohortId' | 'externalSubmissionId'> & {
     whatGotWorking: string;
@@ -115,7 +164,13 @@ export interface ParsedIntakeSheet {
   valid: NormalisedRow[];
   invalid: SheetRowIssue[];
   /** Groups appearing more than once. Never judged automatically. */
-  duplicateGroups: { groupNumber: number; rows: number[] }[];
+  /**
+   * Groups that submitted the form more than once.
+   *
+   * Resubmitting is ordinary behaviour — a team fixes a broken link and sends
+   * the form again — so one row is chosen rather than the group being blocked.
+   */
+  resubmittedGroups: ResubmittedGroup[];
   /** Fatal: the sheet cannot be used at all. */
   fatalError?: string;
 }
@@ -144,6 +199,25 @@ export function normaliseAccessMode(value: string): 'open' | 'credentials' | nul
   if (OPEN_ACCESS.has(cleaned)) return 'open';
   if (SPECIFIC_LOGIN.has(cleaned)) return 'credentials';
   return null;
+}
+
+/**
+ * The Google Form timestamp, in the shapes a sheet actually holds it.
+ *
+ * Forms write a locale-formatted string rather than ISO, and a sheet that has
+ * been exported and re-imported can hold almost anything. A value we cannot
+ * read returns null rather than a guess: an invented date would silently decide
+ * which of a team's submissions gets judged.
+ */
+export function parseSheetTimestamp(value: string): Date | null {
+  const raw = value.trim();
+  if (!raw) return null;
+
+  // `2026-09-11 17:42:03` — Forms' default. Treated as ISO by making the
+  // separator explicit; anything else falls through to Date's own parsing.
+  const iso = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(:(\d{2}))?$/.exec(raw);
+  const parsed = iso ? new Date(raw.replace(' ', 'T')) : new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
 /** A group number as the sheet might contain it: "12", " 12 ", "Group 12". */
@@ -189,7 +263,13 @@ function normaliseRow(
   options: ParseOptions,
 ): { ok: true; value: NormalisedRow } | { ok: false; issues: SheetRowIssue[] } {
   const issues: SheetRowIssue[] = [];
-  const get = (header: string) => (cells[normaliseHeader(header)] ?? '').trim();
+  const get = (header: string) => {
+    for (const candidate of headerCandidates(header)) {
+      const value = cells[candidate];
+      if (value !== undefined) return value.trim();
+    }
+    return '';
+  };
 
   const groupNumber = normaliseGroupNumber(get('Group Number'));
   const fail = (field: string, reason: string) =>
@@ -260,6 +340,7 @@ function normaliseRow(
     value: {
       row: rowNumber,
       groupNumber: groupNumber!,
+      submittedAt: parseSheetTimestamp(get('Timestamp')),
       input: {
         groupNumber: groupNumber!,
         ideaSlug: category!.slug,
@@ -297,7 +378,7 @@ export function parseSheetRows(rows: string[][], options: ParseOptions): ParsedI
       blankRowsIgnored: 0,
       valid: [],
       invalid: [],
-      duplicateGroups: [],
+      resubmittedGroups: [],
       fatalError: 'The sheet is empty — no header row was found.',
     };
   }
@@ -305,7 +386,9 @@ export function parseSheetRows(rows: string[][], options: ParseOptions): ParsedI
   const headers = headerRow.map((h) => h.trim());
   const normalised = headers.map(normaliseHeader);
 
-  const missing = REQUIRED_HEADERS.filter((h) => !normalised.includes(normaliseHeader(h)));
+  const missing = REQUIRED_HEADERS.filter(
+    (h) => !headerCandidates(h).some((candidate) => normalised.includes(candidate)),
+  );
   if (missing.length > 0) {
     /*
      * Refused whole, not row by row.
@@ -319,7 +402,7 @@ export function parseSheetRows(rows: string[][], options: ParseOptions): ParsedI
       blankRowsIgnored: 0,
       valid: [],
       invalid: [],
-      duplicateGroups: [],
+      resubmittedGroups: [],
       fatalError: `The sheet is missing required column(s): ${missing.join(', ')}.`,
     };
   }
@@ -351,26 +434,88 @@ export function parseSheetRows(rows: string[][], options: ParseOptions): ParsedI
   }
 
   /*
-   * One final submission per group is the rule, so two rows for one group is a
-   * question we cannot answer: the later row might be a correction or a
-   * mistake. Neither is judged, and an operator is told which rows to look at.
+   * A group that submitted twice, resolved rather than blocked.
+   *
+   * Resubmitting is ordinary: a team notices a broken link ten minutes before
+   * the deadline and sends the form again. Refusing to judge either row would
+   * punish exactly the teams who were paying attention, so the most recent
+   * submission wins and the earlier ones are recorded as superseded.
+   *
+   * "Most recent VALID" is the part that matters. A newer row that fails
+   * validation — an empty product URL, a login mode with no password — does not
+   * replace an older working one. The older row is judged and the report says
+   * why the newer was not used, because a team seeing a low mark deserves to
+   * know which of their submissions produced it.
+   *
+   * Ordering falls back to sheet position when timestamps are missing or
+   * unreadable: Google Forms appends, so a later row is a later submission. A
+   * fabricated date would decide this silently, and this decision should never
+   * be silent.
    */
-  const byGroup = new Map<number, number[]>();
-  for (const row of valid) {
-    byGroup.set(row.groupNumber, [...(byGroup.get(row.groupNumber) ?? []), row.row]);
-  }
-  const duplicateGroups = [...byGroup.entries()]
-    .filter(([, rowNumbers]) => rowNumbers.length > 1)
-    .map(([groupNumber, rowNumbers]) => ({ groupNumber, rows: rowNumbers }));
+  const laterThan = (a: NormalisedRow, b: NormalisedRow): boolean => {
+    if (a.submittedAt && b.submittedAt) return a.submittedAt.getTime() > b.submittedAt.getTime();
+    // A row with a readable timestamp is preferred over one without.
+    if (a.submittedAt && !b.submittedAt) return true;
+    if (!a.submittedAt && b.submittedAt) return false;
+    return a.row > b.row;
+  };
 
-  const duplicated = new Set(duplicateGroups.map((d) => d.groupNumber));
+  const validByGroup = new Map<number, NormalisedRow[]>();
+  for (const row of valid) {
+    validByGroup.set(row.groupNumber, [...(validByGroup.get(row.groupNumber) ?? []), row]);
+  }
+
+  /** Invalid rows that still declared a group, so a rejection can be explained. */
+  const invalidByGroup = new Map<number, SheetRowIssue[]>();
+  for (const issue of invalid) {
+    if (issue.groupNumber === null) continue;
+    invalidByGroup.set(issue.groupNumber, [...(invalidByGroup.get(issue.groupNumber) ?? []), issue]);
+  }
+
+  const selected: NormalisedRow[] = [];
+  const resubmittedGroups: ResubmittedGroup[] = [];
+
+  for (const [groupNumber, rows] of validByGroup) {
+    const ordered = [...rows].sort((a, b) => (laterThan(a, b) ? -1 : 1));
+    const winner = ordered[0]!;
+    selected.push(winner);
+
+    const supersededRows = ordered.slice(1).map((r) => r.row);
+
+    /*
+     * Was there a newer row that could not be used?
+     *
+     * Only rows after the winner count: an invalid row older than the one being
+     * judged is simply an earlier attempt and needs no explanation.
+     */
+    const newerInvalid = (invalidByGroup.get(groupNumber) ?? []).filter((issue) => issue.row > winner.row);
+    const newestRejected = newerInvalid.length > 0
+      ? {
+          row: Math.max(...newerInvalid.map((i) => i.row)),
+          reason: newerInvalid
+            .filter((i) => i.row === Math.max(...newerInvalid.map((x) => x.row)))
+            .map((i) => `${i.field} — ${i.reason}`)
+            .join(' '),
+        }
+      : undefined;
+
+    if (supersededRows.length > 0 || newestRejected) {
+      resubmittedGroups.push({
+        groupNumber,
+        selectedRow: winner.row,
+        supersededRows,
+        ...(newestRejected ? { newestRejected } : {}),
+      });
+    }
+  }
+
   return {
     headers,
     rowsRead,
     blankRowsIgnored,
-    valid: valid.filter((row) => !duplicated.has(row.groupNumber)),
+    valid: selected,
     invalid,
-    duplicateGroups,
+    resubmittedGroups,
   };
 }
 

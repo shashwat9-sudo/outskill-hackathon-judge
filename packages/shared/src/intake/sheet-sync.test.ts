@@ -181,12 +181,51 @@ describe('sync', () => {
     expect(second.newSubmissions).toBe(0);
   });
 
-  it('refuses both rows when a group submitted twice, and says which rows', async () => {
-    const report = await run(fakeSource(sheetRows([{}, { 'Product Name': 'SpendWise v2' }])), false);
+  it('imports the latest response when a group submitted twice', async () => {
+    /*
+     * One final submission per group, and the latest one is the final one.
+     * Blocking both would punish the team who noticed a broken link and fixed
+     * it before the deadline.
+     */
+    const report = await run(
+      fakeSource(
+        sheetRows([
+          { Timestamp: '2026-09-11 14:00:00' },
+          { Timestamp: '2026-09-11 17:30:00', 'Product Name': 'SpendWise v2' },
+        ]),
+      ),
+      false,
+    );
 
-    expect(report.duplicateGroups).toEqual([{ groupNumber: 12, rows: [2, 3] }]);
-    expect(report.newSubmissions).toBe(0);
-    expect(JSON.stringify(report.duplicateGroups)).not.toContain('Priya');
+    expect(report.newSubmissions).toBe(1);
+    expect(report.jobsQueued).toBe(1);
+    expect(report.resubmittedGroups).toEqual([
+      { groupNumber: 12, selectedRow: 3, supersededRows: [2] },
+    ]);
+    expect(JSON.stringify(report.resubmittedGroups)).not.toContain('Priya');
+
+    const { rows } = await db.query<{ product_name: string; n: string }>(
+      'select product_name, (select count(*) from submissions)::text n from submissions',
+    );
+    expect(rows[0]!.product_name).toBe('SpendWise v2');
+    expect(Number(rows[0]!.n)).toBe(1);
+  });
+
+  it('creates one job however many times a learner resubmitted', async () => {
+    const report = await run(
+      fakeSource(
+        sheetRows([
+          { Timestamp: '2026-09-11 09:00:00' },
+          { Timestamp: '2026-09-11 12:00:00' },
+          { Timestamp: '2026-09-11 17:00:00' },
+        ]),
+      ),
+      false,
+    );
+
+    expect(report.jobsQueued).toBe(1);
+    const { rows } = await db.query<{ n: string }>('select count(*) n from assessment_jobs');
+    expect(Number(rows[0]!.n)).toBe(1);
   });
 
   it('seals a specific-login password and keeps it out of the report', async () => {
@@ -544,12 +583,36 @@ describe('the operator table', () => {
     expect(report.groups.some((g) => g.status === 'ready')).toBe(true);
   });
 
-  it('shows a duplicate group naming both rows', async () => {
-    const report = await run(fakeSource(sheetRows([{}, {}])), true);
-    const duplicate = report.groups.find((g) => g.status === 'duplicate')!;
+  it('shows which row replaced which', async () => {
+    const report = await run(
+      fakeSource(
+        sheetRows([{ Timestamp: '2026-09-11 09:00:00' }, { Timestamp: '2026-09-11 17:00:00' }]),
+      ),
+      true,
+    );
 
-    expect(duplicate.issue).toMatch(/rows 2 and 3/);
-    expect(duplicate.issue).toMatch(/neither row was imported/i);
+    const superseded = report.groups.find((g) => g.status === 'superseded')!;
+    expect(superseded.row).toBe(2);
+    expect(superseded.issue).toMatch(/replaced by a later submission on row 3/i);
+    expect(report.groups.find((g) => g.status === 'ready')!.row).toBe(3);
+  });
+
+  it('explains a newer response that could not be used', async () => {
+    // The team must be able to see that their latest attempt was rejected and
+    // an earlier one judged instead.
+    const report = await run(
+      fakeSource(
+        sheetRows([
+          { Timestamp: '2026-09-11 09:00:00' },
+          { Timestamp: '2026-09-11 17:00:00', 'MVP/Product Link': '' },
+        ]),
+      ),
+      true,
+    );
+
+    const rejected = report.groups.find((g) => g.issue?.includes('could not be used'))!;
+    expect(rejected.row).toBe(3);
+    expect(rejected.issue).toMatch(/row 2 is being imported instead/i);
   });
 
   it('renders no credential and no learner PII', async () => {

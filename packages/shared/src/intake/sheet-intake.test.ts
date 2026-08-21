@@ -5,6 +5,7 @@ import {
   normaliseAccessMode,
   normaliseGroupNumber,
   parseSheetRows,
+  parseSheetTimestamp,
   sheetSubmissionId,
 } from './sheet-rows';
 import { parseCsv } from '../utils/csv';
@@ -276,34 +277,150 @@ describe('the other fields', () => {
   });
 });
 
-describe('a group that submitted twice', () => {
-  it('is reported as a conflict and neither row is judged', () => {
-    /*
-     * One final submission per group is the rule. Two rows is a question we
-     * cannot answer — the second might be a correction or a mistake — so a
-     * human decides rather than the parser picking.
-     */
-    const result = parse(sheet([row(), row({ 'Product Name': 'SpendWise v2' })]));
+describe('a group that submitted the form twice', () => {
+  /*
+   * Resubmitting is ordinary. A team notices a broken link ten minutes before
+   * the deadline and sends the form again — and the rule the event runs on is
+   * one final submission per group, so the latest one is the final one.
+   *
+   * Refusing to judge either row would punish exactly the teams who were
+   * paying attention.
+   */
 
-    expect(result.duplicateGroups).toEqual([{ groupNumber: 12, rows: [2, 3] }]);
-    expect(result.valid).toHaveLength(0);
+  it('judges the most recent response and records the earlier one as superseded', () => {
+    const result = parse(
+      sheet([
+        row({ Timestamp: '2026-09-11 14:00:00', 'Product Name': 'SpendWise' }),
+        row({ Timestamp: '2026-09-11 17:30:00', 'Product Name': 'SpendWise v2' }),
+      ]),
+    );
+
+    expect(result.valid).toHaveLength(1);
+    expect(result.valid[0]!.input.productName).toBe('SpendWise v2');
+    expect(result.resubmittedGroups).toEqual([
+      { groupNumber: 12, selectedRow: 3, supersededRows: [2] },
+    ]);
   });
 
-  it('reports only safe details about the conflict', () => {
+  it('does not care what order the rows sit in', () => {
+    // Sheets get sorted. The timestamp decides, not the position.
+    const result = parse(
+      sheet([
+        row({ Timestamp: '2026-09-11 17:30:00', 'Product Name': 'Newest' }),
+        row({ Timestamp: '2026-09-11 09:00:00', 'Product Name': 'Oldest' }),
+      ]),
+    );
+
+    expect(result.valid[0]!.input.productName).toBe('Newest');
+    expect(result.resubmittedGroups[0]!.selectedRow).toBe(2);
+  });
+
+  it('keeps the older working submission when the newer one is broken', () => {
+    /*
+     * The rule that protects a team from themselves. A later response with an
+     * empty product link must not discard an earlier complete one — otherwise a
+     * team that resubmitted badly would be judged on nothing at all.
+     */
+    const result = parse(
+      sheet([
+        row({ Timestamp: '2026-09-11 14:00:00', 'Product Name': 'Working' }),
+        row({ Timestamp: '2026-09-11 17:30:00', 'MVP/Product Link': '' }),
+      ]),
+    );
+
+    expect(result.valid).toHaveLength(1);
+    expect(result.valid[0]!.input.productName).toBe('Working');
+
+    const group = result.resubmittedGroups[0]!;
+    expect(group.selectedRow).toBe(2);
+    expect(group.newestRejected?.row).toBe(3);
+    expect(group.newestRejected?.reason).toMatch(/MVP\/Product Link/);
+  });
+
+  it('creates exactly one submission for a group however many times they submitted', () => {
+    const result = parse(
+      sheet([row({ Timestamp: '2026-09-11 09:00:00' }), row({ Timestamp: '2026-09-11 12:00:00' }), row({ Timestamp: '2026-09-11 17:00:00' })]),
+    );
+
+    expect(result.valid).toHaveLength(1);
+    expect(result.valid[0]!.row).toBe(4);
+    expect(result.resubmittedGroups[0]!.supersededRows).toEqual([3, 2]);
+  });
+
+  it('falls back to sheet order when timestamps are missing', () => {
+    // Google Forms appends, so a later row is a later submission. Inventing a
+    // date would decide this silently.
+    const result = parse(
+      sheet([
+        row({ Timestamp: '', 'Product Name': 'First' }),
+        row({ Timestamp: '', 'Product Name': 'Second' }),
+      ]),
+    );
+
+    expect(result.valid[0]!.input.productName).toBe('Second');
+  });
+
+  it('prefers a row whose timestamp can be read over one whose cannot', () => {
+    const result = parse(
+      sheet([
+        row({ Timestamp: 'not a date at all', 'Product Name': 'Unreadable' }),
+        row({ Timestamp: '2026-09-11 10:00:00', 'Product Name': 'Readable' }),
+      ]),
+    );
+
+    expect(result.valid[0]!.input.productName).toBe('Readable');
+  });
+
+  it('reports only safe details about the resubmission', () => {
     const result = parse(sheet([row(), row()]));
-    const serialised = JSON.stringify(result.duplicateGroups);
+    const serialised = JSON.stringify(result.resubmittedGroups);
 
     expect(serialised).toContain('12');
     expect(serialised).not.toContain('Priya');
     expect(serialised).not.toContain('example.invalid');
   });
 
-  it('leaves other groups judgeable', () => {
+  it('leaves other groups untouched', () => {
     const result = parse(
       sheet([row(), row(), row({ 'Group Number': '13', Category: 'Meal Planner' })]),
     );
+
+    expect(result.valid).toHaveLength(2);
+    expect(result.valid.map((v) => v.groupNumber).sort()).toEqual([12, 13]);
+  });
+});
+
+describe('reading the timestamp', () => {
+  it('understands the shape Google Forms writes', () => {
+    expect(parseSheetTimestamp('2026-09-11 17:42:03')?.toISOString()).toContain('2026-09-11');
+    expect(parseSheetTimestamp('2026-09-11T17:42:03')?.toISOString()).toContain('2026-09-11');
+  });
+
+  it('returns null rather than guessing at something unreadable', () => {
+    for (const bad of ['', '   ', 'yesterday', 'not a date']) {
+      expect(parseSheetTimestamp(bad), bad).toBeNull();
+    }
+  });
+});
+
+describe('header aliases', () => {
+  it('accepts a reworded column for a canonical one', () => {
+    // Same question, different words. The production headers stay canonical.
+    const headers = SHEET_HEADERS.map((h) =>
+      h === 'MVP/Product Link' ? 'Product URL' : h === 'Group Number' ? 'Group' : h,
+    );
+    const values = SHEET_HEADERS.map((h) => row()[h] ?? '');
+
+    const result = parse([headers, values]);
     expect(result.valid).toHaveLength(1);
-    expect(result.valid[0]!.groupNumber).toBe(13);
+    expect(result.valid[0]!.input.productUrl).toBe('https://spendwise.example.com');
+  });
+
+  it('still fails closed on a column it does not recognise', () => {
+    const headers = SHEET_HEADERS.map((h) => (h === 'Main User Action' ? 'Some Other Question' : h));
+    const values = SHEET_HEADERS.map((h) => row()[h] ?? '');
+
+    expect(parse([headers, values]).fatalError).toMatch(/missing required column/i);
   });
 });
 

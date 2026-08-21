@@ -6,6 +6,7 @@ import {
   parseSheetRows,
   sheetSubmissionId,
   type ParsedIntakeSheet,
+  type ResubmittedGroup,
   type SheetRowIssue,
 } from './sheet-rows';
 
@@ -37,7 +38,7 @@ export interface IntakeGroupRow {
   groupNumber: number;
   productName: string;
   category: string;
-  status: 'ready' | 'already_synced' | 'changed_since_sync' | 'blocked' | 'duplicate';
+  status: 'ready' | 'already_synced' | 'changed_since_sync' | 'blocked' | 'superseded';
   /** Plain-language explanation when the status is not 'ready'. */
   issue?: string;
 }
@@ -52,7 +53,8 @@ export interface SyncReport {
   blankRowsIgnored: number;
   validRows: number;
   invalidRows: number;
-  duplicateGroups: { groupNumber: number; rows: number[] }[];
+  /** Groups that submitted more than once, and which row was chosen. */
+  resubmittedGroups: ResubmittedGroup[];
   newSubmissions: number;
   alreadyIngested: number;
   jobsQueued: number;
@@ -154,7 +156,7 @@ export async function syncSheet(options: SyncOptions): Promise<SyncReport> {
     blankRowsIgnored: 0,
     validRows: 0,
     invalidRows: 0,
-    duplicateGroups: [],
+    resubmittedGroups: [],
     newSubmissions: 0,
     alreadyIngested: 0,
     jobsQueued: 0,
@@ -220,7 +222,7 @@ export async function syncSheet(options: SyncOptions): Promise<SyncReport> {
     existingByGroup.set(entry.groupNumber, snapshotFingerprint(entry.snapshot));
   }
 
-  const duplicatedGroups = new Set(parsed.duplicateGroups.map((d) => d.groupNumber));
+
   const changedSinceSync: SyncReport['changedSinceSync'] = [];
 
   const groups: IntakeGroupRow[] = [];
@@ -254,18 +256,43 @@ export async function syncSheet(options: SyncOptions): Promise<SyncReport> {
     });
   }
 
-  for (const duplicate of parsed.duplicateGroups) {
-    groups.push({
-      row: duplicate.rows[0]!,
-      groupNumber: duplicate.groupNumber,
-      productName: '—',
-      category: '—',
-      status: 'duplicate',
-      issue: `Duplicate Group Number found on rows ${duplicate.rows.join(' and ')}. Neither row was imported.`,
-    });
+  /*
+   * Resubmissions, shown so an operator can see which row won.
+   *
+   * A team that resubmitted should be able to see, at a glance, that their
+   * latest form response is the one being judged — and if it was not, why.
+   */
+  for (const group of parsed.resubmittedGroups) {
+    for (const superseded of group.supersededRows) {
+      groups.push({
+        row: superseded,
+        groupNumber: group.groupNumber,
+        productName: '—',
+        category: '—',
+        status: 'superseded',
+        issue: `Replaced by a later submission on row ${group.selectedRow}. Not imported.`,
+      });
+    }
+    if (group.newestRejected) {
+      groups.push({
+        row: group.newestRejected.row,
+        groupNumber: group.groupNumber,
+        productName: '—',
+        category: '—',
+        status: 'blocked',
+        issue:
+          `Newer submission could not be used (${group.newestRejected.reason}) — ` +
+          `row ${group.selectedRow} is being imported instead.`,
+      });
+    }
   }
 
+  const explainedRows = new Set(
+    parsed.resubmittedGroups.flatMap((g) => (g.newestRejected ? [g.newestRejected.row] : [])),
+  );
   for (const issue of parsed.invalid) {
+    // Already shown above with the row that replaced it.
+    if (explainedRows.has(issue.row)) continue;
     groups.push({
       row: issue.row,
       groupNumber: issue.groupNumber ?? 0,
@@ -277,7 +304,6 @@ export async function syncSheet(options: SyncOptions): Promise<SyncReport> {
   }
 
   groups.sort((a, b) => a.row - b.row || a.groupNumber - b.groupNumber);
-  void duplicatedGroups;
 
   const report: SyncReport = {
     ...base,
@@ -289,7 +315,7 @@ export async function syncSheet(options: SyncOptions): Promise<SyncReport> {
     blankRowsIgnored: parsed.blankRowsIgnored,
     validRows: parsed.valid.length,
     invalidRows: parsed.invalid.length,
-    duplicateGroups: parsed.duplicateGroups,
+    resubmittedGroups: parsed.resubmittedGroups,
     errors: parsed.invalid,
     ...(parsed.fatalError ? { fatalError: parsed.fatalError } : {}),
   };

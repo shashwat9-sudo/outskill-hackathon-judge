@@ -48,7 +48,7 @@ fails to sign with an error that explains nothing.
 | `GOOGLE_SERVICE_ACCOUNT_EMAIL` | `outskill-hackathon-judge@…iam.gserviceaccount.com` | no |
 | `GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY` | `-----BEGIN PRIVATE KEY-----\n…` | **yes** |
 | `GOOGLE_SHEETS_SPREADSHEET_ID` | `1AbC…` (from the sheet URL) | no |
-| `GOOGLE_SHEETS_TAB_NAME` | `Form Responses 1` | no |
+| `GOOGLE_SHEETS_TAB_NAME` | `Submissions - AIAP C13` | no |
 | `GOOGLE_SHEETS_EXTERNAL_COHORT_ID` | `AIAP-C13` | no |
 | `GOOGLE_SHEETS_COHORT_NAME` | `AI Accelerator Cohort 13` | no |
 
@@ -66,6 +66,12 @@ Primary Contact | MVP/Product Link | Access | Login Email | Login Password |
 Brief Description | Main User Action | How AI Helps | What We Got Working |
 Loom Video Link | Final Deck Link
 ```
+
+A small set of **aliases** is accepted for reworded columns (`Group` for `Group
+Number`, `Product URL` for `MVP/Product Link`, and similar). The headers above
+stay canonical; anything not recognised fails closed rather than being guessed
+at, because mapping an ambiguous column is how a product URL ends up judged as
+a Loom link.
 
 **Columns are matched by name, never by position.** Reordering, re-casing or
 re-spacing them changes nothing. A *missing* required column fails the whole
@@ -161,9 +167,21 @@ of those look like a new submission and judge the same product again.
 
 ### A group that submitted twice
 
-One final submission per group is the rule, so two rows is a question intake
-cannot answer — the second might be a correction or a mistake. **Neither is
-judged.** The report names the group and the row numbers, and a human decides.
+Resubmitting is ordinary — a team notices a broken link before the deadline and
+sends the form again — so **the latest valid response wins** and earlier ones are
+recorded as superseded. One submission and one judging job per group, however
+many times they submitted.
+
+Ordering is by the Google Form **Timestamp**. If a timestamp is missing or
+unreadable, sheet position decides instead (Forms appends, so a later row is a
+later submission); a row with a readable timestamp is always preferred over one
+without. Nothing is ever invented — a fabricated date would silently decide
+which of a team's submissions gets judged.
+
+**A newer broken response never discards an older working one.** If the most
+recent row fails validation, the last valid row is imported and Preview says
+why the newer one was not used — otherwise a team would be marked on a
+submission they had already replaced, with nothing explaining it.
 
 The same group number under a *different* cohort is valid and isolated.
 
