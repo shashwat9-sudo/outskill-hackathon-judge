@@ -336,3 +336,94 @@ describe('migrating a database that already has repeat runs', () => {
     expect(after.rows.every((r) => r.attempt <= 0)).toBe(true);
   });
 });
+
+// --------------------------------------------------------------------------
+// Sending a finished job round again
+// --------------------------------------------------------------------------
+
+describe('re-queueing a job that has stopped', () => {
+  /** Put the job in the state the admin queue calls "assessment failed". */
+  const failTheJob = async (attempts: number) =>
+    db.query(
+      `update assessment_jobs
+          set stage = 'failed', attempt_count = $2, last_error = 'Something went wrong.',
+              claimed_by = 'worker-a', lease_expires_at = now() + interval '10 minutes'
+        where id = $1`,
+      [jobId, attempts],
+    );
+
+  it('makes a failed job claimable again', async () => {
+    /*
+     * The admin's "Retry failed assessment" reached this and nothing happened.
+     * The conflict clause assigned `updated_at` to itself — enough to return a
+     * row, which is all the caller checked — so the job stayed in `failed`,
+     * which the claim query does not look at. The button reported success and
+     * the submission never moved.
+     */
+    await failTheJob(1);
+
+    const job = await assessment.enqueueSubmission(
+      (await db.query<{ submission_id: string }>(
+        'select submission_id from assessment_jobs where id = $1',
+        [jobId],
+      )).rows[0]!.submission_id,
+    );
+
+    expect(job.stage).toBe('queued');
+    expect(job.lastError).toBeNull();
+
+    const claimed = await claim();
+    expect(claimed).toHaveLength(1);
+    expect(claimed[0]!.id).toBe(jobId);
+  });
+
+  it('keeps the attempt history rather than starting the count over', async () => {
+    // Two attempts already happened, and browser runs and preflight checks are
+    // stamped with which one produced them. Renumbering would overwrite them.
+    await failTheJob(2);
+    const { rows } = await db.query<{ submission_id: string }>(
+      'select submission_id from assessment_jobs where id = $1',
+      [jobId],
+    );
+
+    const job = await assessment.enqueueSubmission(rows[0]!.submission_id);
+    expect(job.attemptCount).toBe(2);
+
+    const [claimed] = await claim();
+    expect(claimed!.attemptCount).toBe(3);
+  });
+
+  it('gives a job that had exhausted its retries somewhere to go', async () => {
+    /*
+     * An admin pressing re-judge is a new decision to try. Without refreshing
+     * the allowance the claim predicate — attempt_count < max_attempts — would
+     * refuse the job, and the retry would fail silently for exactly the
+     * submissions that most needed it.
+     */
+    await failTheJob(3); // max_attempts defaults to 3.
+    const { rows } = await db.query<{ submission_id: string }>(
+      'select submission_id from assessment_jobs where id = $1',
+      [jobId],
+    );
+
+    await assessment.enqueueSubmission(rows[0]!.submission_id);
+
+    const claimed = await claim();
+    expect(claimed).toHaveLength(1);
+  });
+
+  it('does not re-queue a whole cohort when one submission is retried', async () => {
+    // `enqueueCohort` still conflicts to nothing, so pressing "Start judging"
+    // after a cohort finished cannot silently re-judge all of it.
+    await db.query(`update assessment_jobs set stage = 'completed' where id = $1`, [jobId]);
+
+    const result = await assessment.enqueueCohort(cohortId);
+
+    expect(result.queued).toBe(0);
+    const { rows } = await db.query<{ stage: string }>(
+      'select stage from assessment_jobs where id = $1',
+      [jobId],
+    );
+    expect(rows[0]!.stage).toBe('completed');
+  });
+});

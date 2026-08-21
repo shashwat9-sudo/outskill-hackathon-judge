@@ -1711,7 +1711,10 @@ export class MemoryDataStore implements DataStore {
         const existing = this.db.jobs.find((j) => j.submissionId === submissionId);
         if (existing) {
           existing.stage = 'queued';
-          existing.attemptCount = 0;
+          // Attempt history is kept, and the allowance refreshed, exactly as
+          // the postgres driver does — a re-judge appends to the record of what
+          // was tried rather than erasing it.
+          existing.maxAttempts = Math.max(existing.maxAttempts, existing.attemptCount + 3);
           existing.lastError = null;
           existing.completedAt = null;
           existing.claimedBy = null;

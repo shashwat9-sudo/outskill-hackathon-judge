@@ -99,16 +99,41 @@ export function buildQueueMethods(db: SqlDatabase): QueueMethods {
     },
 
     /**
-     * Queue one submission, returning the existing job if there is one.
+     * Queue one submission — or send an existing job round again.
      *
-     * `do update` on a no-op assignment rather than `do nothing`, because
-     * `do nothing` returns no row and the caller needs the job either way.
+     * This is the re-judge. It is reached from one place, the admin's "Retry
+     * failed assessment", and it used to do nothing at all: the conflict clause
+     * assigned `updated_at` to itself, purely so `returning` would produce a
+     * row. A job sitting in `failed` stayed in `failed`, which is terminal, so
+     * the worker never looked at it again and the button reported success
+     * having changed nothing. The memory driver did reset the job, so this
+     * diverged silently — demo mode worked, production did not.
+     *
+     * `attempt_count` is deliberately kept. It is the audit trail: preflight
+     * checks and browser runs are both stamped with the attempt that produced
+     * them, so the next run appends to that history rather than overwriting it.
+     * What is refreshed is the allowance — an admin pressing re-judge is a new
+     * decision to try, and a job that had exhausted its automatic retries must
+     * not silently refuse one.
      */
     async enqueueSubmission(submissionId) {
       const { rows } = await db.query(
         `insert into assessment_jobs (submission_id, cohort_id)
          select s.id, s.cohort_id from submissions s where s.id = $1
-         on conflict (submission_id) do update set updated_at = assessment_jobs.updated_at
+         on conflict (submission_id) do update
+            set stage = 'queued',
+                claimed_by = null,
+                claimed_at = null,
+                lease_expires_at = null,
+                heartbeat_at = null,
+                next_attempt_at = null,
+                last_error = null,
+                completed_at = null,
+                max_attempts = greatest(
+                  assessment_jobs.max_attempts,
+                  assessment_jobs.attempt_count + 3
+                ),
+                updated_at = now()
          returning *`,
         [submissionId],
       );
