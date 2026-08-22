@@ -159,16 +159,26 @@ describe('initialisation', () => {
     ).toBe('gemini');
   });
 
-  it('still honours the generic AI_API_KEY, so nothing in place breaks', () => {
-    const built = createAiClientFromEnv({
-      AI_PROVIDER: 'openai',
-      AI_MODEL: MODEL,
-      AI_API_KEY: 'generic',
-      AI_MAX_RETRIES: 0,
-      AI_TIMEOUT_MS: 1000,
-      DEMO_MODE: false,
-    });
-    expect(built.providerName).toBe('openai');
+  it('refuses the generic AI_API_KEY rather than sending it to OpenAI', () => {
+    /*
+     * AI_API_KEY holds the *Gemini* key on the production worker — kept there
+     * so a rollback is a change to AI_PROVIDER and nothing else. Falling back
+     * to it would send a Gemini key to OpenAI and fail with a 401 that
+     * describes none of that, mid-batch. Refusing at construction says the
+     * true thing, before any request leaves the machine.
+     *
+     * `key-isolation.test.ts` covers this boundary in full.
+     */
+    expect(() =>
+      createAiClientFromEnv({
+        AI_PROVIDER: 'openai',
+        AI_MODEL: MODEL,
+        AI_API_KEY: 'a-gemini-key',
+        AI_MAX_RETRIES: 0,
+        AI_TIMEOUT_MS: 1000,
+        DEMO_MODE: false,
+      }),
+    ).toThrow(/OPENAI_API_KEY is required/);
   });
 });
 

@@ -213,14 +213,23 @@ export function providerApiKey(env: {
   GEMINI_API_KEY?: string | undefined;
   ANTHROPIC_API_KEY?: string | undefined;
 }): string | undefined {
+  /*
+   * OpenAI reads its own variable and nothing else.
+   *
+   * On the production worker AI_API_KEY holds the *Gemini* key — deliberately,
+   * so that rolling back is a change to AI_PROVIDER alone. A generic fallback
+   * would turn a missing OPENAI_API_KEY into "send the Gemini key to OpenAI",
+   * which fails with a 401 that describes none of that, during a live batch.
+   * Refusing at load time says the true thing instead.
+   */
+  if (env.AI_PROVIDER === 'openai') return env.OPENAI_API_KEY;
+
   const specific =
-    env.AI_PROVIDER === 'openai'
-      ? env.OPENAI_API_KEY
-      : env.AI_PROVIDER === 'gemini'
-        ? env.GEMINI_API_KEY
-        : env.AI_PROVIDER === 'anthropic'
-          ? env.ANTHROPIC_API_KEY
-          : undefined;
+    env.AI_PROVIDER === 'gemini'
+      ? env.GEMINI_API_KEY
+      : env.AI_PROVIDER === 'anthropic'
+        ? env.ANTHROPIC_API_KEY
+        : undefined;
   return specific || env.AI_API_KEY;
 }
 
@@ -287,8 +296,17 @@ export function loadEnv(
     // Ollama runs on this machine and has nothing to authenticate against.
     if (env.AI_PROVIDER !== 'demo' && env.AI_PROVIDER !== 'ollama' && !providerApiKey(env)) {
       const variable = PROVIDER_KEY_VARIABLE[env.AI_PROVIDER] ?? 'AI_API_KEY';
+      /*
+       * OpenAI is told to set one variable and only that one. Suggesting
+       * AI_API_KEY would be actively harmful advice here: on this worker it
+       * holds the Gemini key, and following the suggestion would put a Gemini
+       * key where an OpenAI one belongs.
+       */
       problems.push(
-        `${variable} (or AI_API_KEY) must be set when AI_PROVIDER is "${env.AI_PROVIDER}".`,
+        env.AI_PROVIDER === 'openai'
+          ? `${variable} must be set when AI_PROVIDER is "openai". ` +
+            'AI_API_KEY is not used for OpenAI and is not a substitute for it.'
+          : `${variable} (or AI_API_KEY) must be set when AI_PROVIDER is "${env.AI_PROVIDER}".`,
       );
     }
   }

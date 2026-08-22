@@ -61,6 +61,19 @@ export function createAiClientFromEnv(env: {
  * at load time. Kept here too rather than imported, because this package is
  * consumed independently of the shared config loader and must not silently
  * depend on it.
+ *
+ * OpenAI takes no fallback. Everything else still may.
+ *
+ * The asymmetry is deliberate and is the point. `AI_API_KEY` holds the Gemini
+ * key on the production worker, kept there so a rollback is a change to
+ * AI_PROVIDER and nothing else. A generic fallback would therefore mean that a
+ * missing OPENAI_API_KEY sends *the Gemini key to OpenAI* — a 401 whose text
+ * says nothing about the real mistake, arriving during a live judging batch,
+ * and one attempt away from someone "fixing" it by pasting a key into the
+ * wrong variable.
+ *
+ * Gemini keeps reading AI_API_KEY because that is where its working key
+ * already is, and this migration must not require touching it.
  */
 function resolveApiKey(
   provider: string,
@@ -71,13 +84,13 @@ function resolveApiKey(
     ANTHROPIC_API_KEY?: string;
   },
 ): string | undefined {
+  if (provider === 'openai') return env.OPENAI_API_KEY;
+
   const specific =
-    provider === 'openai'
-      ? env.OPENAI_API_KEY
-      : provider === 'gemini'
-        ? env.GEMINI_API_KEY
-        : provider === 'anthropic'
-          ? env.ANTHROPIC_API_KEY
-          : undefined;
+    provider === 'gemini'
+      ? env.GEMINI_API_KEY
+      : provider === 'anthropic'
+        ? env.ANTHROPIC_API_KEY
+        : undefined;
   return specific || env.AI_API_KEY;
 }
