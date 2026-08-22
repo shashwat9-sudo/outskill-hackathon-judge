@@ -13,6 +13,7 @@
 import type { z } from 'zod';
 import { UNTRUSTED_CONTENT_INSTRUCTION } from './injection';
 import { schemaInstruction } from './schema-shape';
+import { stripNulls, toStrictJsonSchema, type JsonSchemaObject } from './json-schema';
 
 export type AiProviderName = 'demo' | 'anthropic' | 'openai' | 'gemini' | 'ollama' | 'custom';
 
@@ -34,13 +35,31 @@ export interface AiRequest<T> {
   /** Anonymised submission id — never a team identifier. */
   correlationId: string;
   maxOutputTokens?: number;
+  /** Names the schema in the provider request. Diagnostic only. */
+  schemaName?: string;
+}
+
+/**
+ * Token accounting for one `run`, summed across every attempt it made.
+ *
+ * `cachedInputTokens` is reported by providers that bill cached prompt prefixes
+ * differently and is zero elsewhere — it is a subset of `inputTokens`, not an
+ * addition to it, so totalling them would double-count. `requests` is the
+ * number of HTTP calls actually made, which is what a rate limit is measured
+ * against and is not the same as `attempts` when a retry is swallowed.
+ */
+export interface AiUsage {
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  requests: number;
 }
 
 export interface AiResponse<T> {
   data: T;
   modelVersion: string;
   promptVersion: string;
-  usage: { inputTokens: number; outputTokens: number };
+  usage: AiUsage;
   /** True when validation failed on every attempt and a degraded result was used. */
   degraded: boolean;
   attempts: number;
@@ -51,9 +70,50 @@ export class AiError extends Error {
   constructor(
     message: string,
     readonly retryable: boolean,
+    /**
+     * The provider's own `Retry-After`, in milliseconds, when it sent one.
+     *
+     * Null means "we are guessing", and the caller backs off exponentially
+     * instead. A 429 that names its window is the one case where waiting the
+     * stated time is better than any schedule we could invent.
+     */
+    readonly retryAfterMs: number | null = null,
   ) {
     super(message);
   }
+}
+
+/**
+ * Read `Retry-After`, which may be seconds or an HTTP date.
+ *
+ * Returns null for anything unparseable rather than a default, so a malformed
+ * header falls through to exponential backoff instead of pinning the wait to a
+ * number nobody sent.
+ */
+export function parseRetryAfter(header: string | null, now: number = Date.now()): number | null {
+  if (!header) return null;
+  const trimmed = header.trim();
+
+  const seconds = Number(trimmed);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.round(seconds * 1000);
+
+  const date = Date.parse(trimmed);
+  if (Number.isNaN(date)) return null;
+  return Math.max(0, date - now);
+}
+
+export interface AiCompletion {
+  text: string;
+  usage: { inputTokens: number; cachedInputTokens?: number; outputTokens: number };
+  /**
+   * True when the provider constrained decoding to the supplied JSON Schema.
+   *
+   * Read by `AiClient` to decide whether to strip nulls before validating: a
+   * strict schema expresses "absent" as an explicit null, and a prompt-guided
+   * one expresses it as a missing key. Reported by the provider rather than
+   * assumed by the caller, because a provider may decline the schema.
+   */
+  usedStrictSchema?: boolean;
 }
 
 export interface AiProvider {
@@ -64,7 +124,14 @@ export interface AiProvider {
     user: string;
     maxOutputTokens: number;
     timeoutMs: number;
-  }): Promise<{ text: string; usage: { inputTokens: number; outputTokens: number } }>;
+    /**
+     * The response schema, when it could be expressed strictly. Providers that
+     * cannot constrain decoding ignore it — the prompt already describes the
+     * shape and Zod still validates, so ignoring it costs nothing.
+     */
+    jsonSchema?: JsonSchemaObject | null;
+    schemaName?: string;
+  }): Promise<AiCompletion>;
 }
 
 // --------------------------------------------------------------------------
@@ -108,8 +175,22 @@ export class AiClient {
     ].join('\n\n');
     const attemptsAllowed = Math.max(1, this.config.maxRetries + 1);
 
+    /*
+     * Offered to the provider, not required by it. A provider that can
+     * constrain decoding to this cannot return the wrong shape at all; one
+     * that cannot ignores it and relies on the prompt, exactly as before.
+     * Null here means the schema could not be expressed faithfully — see
+     * `toStrictJsonSchema`, which refuses rather than approximating.
+     */
+    const jsonSchema = toStrictJsonSchema(request.schema as unknown as z.ZodTypeAny);
+
     let lastError = '';
-    let usage = { inputTokens: 0, outputTokens: 0 };
+    let usage: AiUsage = {
+      inputTokens: 0,
+      cachedInputTokens: 0,
+      outputTokens: 0,
+      requests: 0,
+    };
 
     for (let attempt = 1; attempt <= attemptsAllowed; attempt++) {
       const user =
@@ -120,28 +201,55 @@ export class AiClient {
             'required field present.';
 
       let text: string;
+      let strict = false;
       try {
         const result = await this.provider.complete({
           system,
           user,
           maxOutputTokens: request.maxOutputTokens ?? 4096,
           timeoutMs: this.config.timeoutMs,
+          jsonSchema,
+          schemaName: request.schemaName ?? 'judging_response',
         });
         text = result.text;
+        strict = result.usedStrictSchema === true;
         usage = {
           inputTokens: usage.inputTokens + result.usage.inputTokens,
+          cachedInputTokens: usage.cachedInputTokens + (result.usage.cachedInputTokens ?? 0),
           outputTokens: usage.outputTokens + result.usage.outputTokens,
+          requests: usage.requests + 1,
         };
       } catch (error) {
         if (error instanceof AiError && !error.retryable) throw error;
+        usage = { ...usage, requests: usage.requests + 1 };
         lastError = error instanceof Error ? error.message : String(error);
         if (attempt === attemptsAllowed) {
           throw new AiError(`AI call failed after ${attempt} attempts: ${lastError}`, false);
         }
+        /*
+         * Wait before trying again.
+         *
+         * This loop used to retry immediately. Against a rate limit that is
+         * worse than not retrying: three calls land inside the same window, all
+         * three are refused, and the job fails having done nothing but add load
+         * at the moment the provider asked for less. A `Retry-After` is obeyed
+         * when the provider sends one, because it knows when the window opens
+         * and we are guessing.
+         */
+        await sleep(backoffMs(attempt, error));
         continue;
       }
 
-      const parsed = parseJsonResponse(text);
+      /*
+       * A strictly-constrained response says "nothing here" with an explicit
+       * null, because strict mode requires every key to be present. Zod's
+       * `.optional()` means a key may be absent and rejects a null, so without
+       * this every plan step carrying `"nth": null` would fail validation and
+       * burn the attempt budget on a response that was correct.
+       */
+      const parsed = strict
+        ? mapParsed(parseJsonResponse(text), stripNulls)
+        : parseJsonResponse(text);
       if (!parsed.ok) {
         lastError = parsed.error;
         continue;
@@ -173,6 +281,37 @@ export class AiClient {
       false,
     );
   }
+}
+
+/** Apply a transform to a successful parse, leaving a failure untouched. */
+function mapParsed(
+  parsed: { ok: true; value: unknown } | { ok: false; error: string },
+  fn: (value: unknown) => unknown,
+): { ok: true; value: unknown } | { ok: false; error: string } {
+  return parsed.ok ? { ok: true, value: fn(parsed.value) } : parsed;
+}
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** Longest a single backoff will wait, so a retry cannot outlive the stage. */
+const MAX_BACKOFF_MS = 20_000;
+
+/**
+ * How long to wait before retrying attempt `attempt`.
+ *
+ * Exponential with jitter. The jitter is not decoration: a worker retrying a
+ * batch on a fixed schedule re-synchronises every one of its calls onto the
+ * same instant, which is how a transient rate limit becomes a persistent one.
+ *
+ * A provider's own `Retry-After` wins outright — it knows when the window
+ * reopens and this does not.
+ */
+export function backoffMs(attempt: number, error: unknown): number {
+  if (error instanceof AiError && error.retryAfterMs !== null) {
+    return Math.min(error.retryAfterMs, MAX_BACKOFF_MS);
+  }
+  const base = Math.min(1000 * 2 ** (attempt - 1), MAX_BACKOFF_MS);
+  return Math.round(base * (0.5 + Math.random() * 0.5));
 }
 
 /**
@@ -267,9 +406,201 @@ class AnthropicProvider implements AiProvider {
   }
 }
 
-/** OpenAI-compatible chat completions — also covers most gateways. */
-class OpenAiProvider implements AiProvider {
+/**
+ * OpenAI Responses API.
+ *
+ * Its own adapter rather than a variant of the chat-completions one, for three
+ * reasons that each bite differently.
+ *
+ * The request shape differs: `input` rather than `messages`,
+ * `max_output_tokens` rather than `max_tokens`. That last one is not cosmetic —
+ * newer models reject `max_tokens` outright, so the old adapter would have
+ * failed every call with a 400 that reads like a configuration mistake.
+ *
+ * Structured Outputs is here rather than JSON mode. JSON mode guarantees only
+ * that the response parses; it can be `{}`. A strict schema constrains decoding
+ * to the shape the pipeline needs, which turns "the model omitted six fields
+ * three times running" from a retry loop into something that cannot happen.
+ *
+ * And the response is a list of output items, not a single message. Reasoning
+ * models put reasoning items in that list, so taking the first item's text
+ * would read an empty string on exactly the models most worth using — the text
+ * has to be gathered from the message items specifically.
+ */
+class OpenAiResponsesProvider implements AiProvider {
   readonly name = 'openai' as const;
+  readonly modelVersion: string;
+
+  constructor(private readonly config: AiConfig) {
+    /*
+     * No default model.
+     *
+     * A default here would let a missing AI_MODEL judge an entire cohort on
+     * some other model, consistently and invisibly, and the scores would look
+     * exactly as plausible. Judging consistency is the whole reason the batch
+     * pins one model, so this refuses instead.
+     */
+    if (!config.model) {
+      throw new AiError('AI_MODEL must be set when AI_PROVIDER is "openai".', false);
+    }
+    this.modelVersion = config.model;
+  }
+
+  async complete(input: {
+    system: string;
+    user: string;
+    maxOutputTokens: number;
+    timeoutMs: number;
+    jsonSchema?: JsonSchemaObject | null;
+    schemaName?: string;
+  }): Promise<AiCompletion> {
+    const strict = Boolean(input.jsonSchema);
+
+    const body: Record<string, unknown> = {
+      model: this.modelVersion,
+      input: [
+        { role: 'system', content: input.system },
+        { role: 'user', content: input.user },
+      ],
+      max_output_tokens: input.maxOutputTokens,
+      text: strict
+        ? {
+            format: {
+              type: 'json_schema',
+              name: input.schemaName ?? 'judging_response',
+              schema: input.jsonSchema,
+              strict: true,
+            },
+          }
+        : { format: { type: 'json_object' } },
+    };
+
+    const response = await fetchWithTimeout(
+      `${this.config.baseUrl ?? 'https://api.openai.com'}/v1/responses`,
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${this.config.apiKey ?? ''}`,
+        },
+        body: JSON.stringify(body),
+      },
+      input.timeoutMs,
+    );
+
+    if (!response.ok) {
+      const raw = await response.text().catch(() => '');
+      throw new AiError(
+        `OpenAI returned ${response.status}: ${redactKeyish(raw).slice(0, 300)}`,
+        /*
+         * 429 and 5xx are worth another attempt; 400, 401, 403 and 404 are not.
+         * A bad key, an exhausted quota or a model this project cannot reach
+         * will answer identically however many times it is asked, and retrying
+         * only delays the operator finding out.
+         */
+        response.status === 429 || response.status >= 500,
+        parseRetryAfter(response.headers.get('retry-after')),
+      );
+    }
+
+    const json = (await response.json()) as OpenAiResponseBody;
+
+    /*
+     * An incomplete response is a failure, not a short answer.
+     *
+     * Hitting the output ceiling truncates mid-JSON, and the parse would fail
+     * anyway — but with "response was not valid JSON", which sends whoever
+     * reads it looking for a prompt problem. Saying which limit was hit costs
+     * nothing and is the difference between a five-minute fix and an hour.
+     */
+    if (json.status === 'incomplete') {
+      throw new AiError(
+        `OpenAI stopped early (${json.incomplete_details?.reason ?? 'unknown reason'}).`,
+        false,
+      );
+    }
+    if (json.status === 'failed') {
+      throw new AiError(
+        `OpenAI reported failure: ${json.error?.message ?? 'no reason given'}`,
+        false,
+      );
+    }
+
+    const text = extractOutputText(json);
+    if (!text.trim()) {
+      // A 200 with no text at all. Scoring a submission on this would produce a
+      // mark from nothing, so it is an error rather than an empty completion.
+      throw new AiError('OpenAI returned no output text.', true);
+    }
+
+    return {
+      text,
+      usage: {
+        inputTokens: json.usage?.input_tokens ?? 0,
+        cachedInputTokens: json.usage?.input_tokens_details?.cached_tokens ?? 0,
+        outputTokens: json.usage?.output_tokens ?? 0,
+      },
+      usedStrictSchema: strict,
+    };
+  }
+}
+
+interface OpenAiResponseBody {
+  status?: string;
+  error?: { message?: string };
+  incomplete_details?: { reason?: string };
+  output_text?: string;
+  output?: {
+    type?: string;
+    content?: { type?: string; text?: string }[];
+  }[];
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    input_tokens_details?: { cached_tokens?: number };
+  };
+}
+
+/**
+ * Gather the assistant's text from a Responses payload.
+ *
+ * `output` is a list of items and only the `message` ones carry text a caller
+ * should read. Reasoning items sit alongside them, so indexing into the list
+ * reads an empty string on a reasoning model — which would then be scored as an
+ * unparseable response rather than a configuration problem.
+ *
+ * `output_text` is the SDK's convenience field and is preferred when present.
+ */
+export function extractOutputText(json: OpenAiResponseBody): string {
+  if (typeof json.output_text === 'string' && json.output_text.trim()) return json.output_text;
+
+  return (json.output ?? [])
+    .filter((item) => item.type === 'message' || item.type === undefined)
+    .flatMap((item) => item.content ?? [])
+    .filter((part) => part.type === 'output_text' || part.type === undefined)
+    .map((part) => part.text ?? '')
+    .join('');
+}
+
+/**
+ * Remove anything key-shaped from provider text before it is put in an error.
+ *
+ * Error bodies are echoed into `last_error` on the job, into logs and into
+ * operator reports. Providers do not normally quote your credential back at
+ * you, but "normally" is not a property worth relying on for a value that must
+ * never be written down — and the cost of being wrong is a key in a database
+ * column and a chat window.
+ */
+export function redactKeyish(text: string): string {
+  return text
+    .replace(/sk-[A-Za-z0-9_-]{8,}/g, '[redacted]')
+    .replace(/AIza[A-Za-z0-9_-]{8,}/g, '[redacted]')
+    .replace(/Bearer\s+[A-Za-z0-9._-]{8,}/gi, 'Bearer [redacted]');
+}
+
+/** OpenAI-compatible chat completions — covers gateways and self-hosted clones. */
+class OpenAiCompatibleProvider implements AiProvider {
+  readonly name = 'custom' as const;
   readonly modelVersion: string;
 
   constructor(private readonly config: AiConfig) {
@@ -301,8 +632,9 @@ class OpenAiProvider implements AiProvider {
     if (!response.ok) {
       const body = await response.text().catch(() => '');
       throw new AiError(
-        `Provider returned ${response.status}: ${body.slice(0, 300)}`,
+        `Provider returned ${response.status}: ${redactKeyish(body).slice(0, 300)}`,
         response.status === 429 || response.status >= 500,
+        parseRetryAfter(response.headers.get('retry-after')),
       );
     }
 
@@ -604,9 +936,17 @@ export function createAiClient(
       // authenticate against, and demanding one would be theatre.
       return new AiClient(new OllamaProvider(config), config);
     case 'openai':
+      requireKey(config);
+      return new AiClient(new OpenAiResponsesProvider(config), config);
+    /*
+     * `custom` keeps the chat-completions shape. It exists for gateways and
+     * self-hosted clones, which overwhelmingly implement that endpoint and not
+     * the Responses API, so pointing it at /v1/responses would break every one
+     * of them to tidy up a name.
+     */
     case 'custom':
       requireKey(config);
-      return new AiClient(new OpenAiProvider(config), config);
+      return new AiClient(new OpenAiCompatibleProvider(config), config);
     default: {
       const exhaustive: never = config.provider;
       throw new AiError(`Unknown AI provider: ${String(exhaustive)}`, false);
@@ -614,10 +954,19 @@ export function createAiClient(
   }
 }
 
+/** The variable an operator should set for each provider, named in the refusal. */
+const KEY_VARIABLE: Partial<Record<AiProviderName, string>> = {
+  openai: 'OPENAI_API_KEY',
+  gemini: 'GEMINI_API_KEY',
+  anthropic: 'ANTHROPIC_API_KEY',
+};
+
 function requireKey(config: AiConfig): void {
   if (!config.apiKey) {
+    const variable = KEY_VARIABLE[config.provider] ?? 'AI_API_KEY';
     throw new AiError(
-      `AI_API_KEY is required when AI_PROVIDER is "${config.provider}". Set DEMO_MODE=1 to run without one.`,
+      `${variable} is required when AI_PROVIDER is "${config.provider}". ` +
+        'Set DEMO_MODE=1 to run without one.',
       false,
     );
   }

@@ -23,6 +23,16 @@ export function createAiClientFromEnv(env: {
   AI_PROVIDER: 'demo' | 'anthropic' | 'openai' | 'gemini' | 'ollama' | 'custom';
   AI_MODEL?: string;
   AI_API_KEY?: string;
+  /**
+   * Provider-specific keys, preferred over the generic one.
+   *
+   * Both can be present at once, which is the point: a migration keeps the
+   * outgoing provider's key exactly where it was, so rolling back is a change
+   * to AI_PROVIDER and nothing else.
+   */
+  OPENAI_API_KEY?: string;
+  GEMINI_API_KEY?: string;
+  ANTHROPIC_API_KEY?: string;
   AI_BASE_URL?: string;
   AI_MAX_RETRIES: number;
   AI_TIMEOUT_MS: number;
@@ -35,11 +45,39 @@ export function createAiClientFromEnv(env: {
   const config: AiConfig = {
     provider,
     model: env.AI_MODEL,
-    apiKey: env.AI_API_KEY,
+    apiKey: resolveApiKey(provider, env),
     baseUrl: env.AI_BASE_URL,
     maxRetries: env.AI_MAX_RETRIES,
     timeoutMs: env.AI_TIMEOUT_MS,
   };
 
   return createAiClient(config, demoResponder);
+}
+
+/**
+ * The key for the provider actually selected.
+ *
+ * Mirrors `providerApiKey` in the shared config, which validates the same rule
+ * at load time. Kept here too rather than imported, because this package is
+ * consumed independently of the shared config loader and must not silently
+ * depend on it.
+ */
+function resolveApiKey(
+  provider: string,
+  env: {
+    AI_API_KEY?: string;
+    OPENAI_API_KEY?: string;
+    GEMINI_API_KEY?: string;
+    ANTHROPIC_API_KEY?: string;
+  },
+): string | undefined {
+  const specific =
+    provider === 'openai'
+      ? env.OPENAI_API_KEY
+      : provider === 'gemini'
+        ? env.GEMINI_API_KEY
+        : provider === 'anthropic'
+          ? env.ANTHROPIC_API_KEY
+          : undefined;
+  return specific || env.AI_API_KEY;
 }

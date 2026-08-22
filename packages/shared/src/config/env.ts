@@ -67,7 +67,20 @@ export const envSchema = z.object({
     .enum(['demo', 'anthropic', 'openai', 'gemini', 'ollama', 'custom'])
     .default('demo'),
   AI_MODEL: z.string().optional(),
+  /**
+   * Generic provider key. Still honoured, and still the fallback.
+   *
+   * The provider-specific variables below exist because switching provider
+   * otherwise means overwriting this one — and the previous provider's key is
+   * then gone. Rolling back from a failed migration would need someone to
+   * recover a secret from wherever it was originally issued, at whatever hour
+   * the migration went wrong. Two named variables cost nothing and make the
+   * rollback a one-word change to AI_PROVIDER.
+   */
   AI_API_KEY: z.string().optional(),
+  OPENAI_API_KEY: z.string().optional(),
+  GEMINI_API_KEY: z.string().optional(),
+  ANTHROPIC_API_KEY: z.string().optional(),
   AI_BASE_URL: z.string().optional(),
   AI_MAX_RETRIES: positiveInt(2),
   AI_TIMEOUT_MS: positiveInt(60_000),
@@ -177,6 +190,40 @@ export interface LoadEnvOptions {
   storageCredential?: 'required' | 'absent';
 }
 
+/** Which named variable each provider prefers. */
+export const PROVIDER_KEY_VARIABLE: Record<string, string> = {
+  openai: 'OPENAI_API_KEY',
+  gemini: 'GEMINI_API_KEY',
+  anthropic: 'ANTHROPIC_API_KEY',
+};
+
+/**
+ * The key for whichever provider is selected.
+ *
+ * Provider-specific first, generic second. That order is what lets both keys
+ * sit side by side during a migration: OpenAI reads its own variable, Gemini
+ * keeps reading the one it has always used, and rolling back becomes a change
+ * to AI_PROVIDER alone rather than a secret someone has to go and reissue at
+ * whatever hour the migration went wrong.
+ */
+export function providerApiKey(env: {
+  AI_PROVIDER: string;
+  AI_API_KEY?: string | undefined;
+  OPENAI_API_KEY?: string | undefined;
+  GEMINI_API_KEY?: string | undefined;
+  ANTHROPIC_API_KEY?: string | undefined;
+}): string | undefined {
+  const specific =
+    env.AI_PROVIDER === 'openai'
+      ? env.OPENAI_API_KEY
+      : env.AI_PROVIDER === 'gemini'
+        ? env.GEMINI_API_KEY
+        : env.AI_PROVIDER === 'anthropic'
+          ? env.ANTHROPIC_API_KEY
+          : undefined;
+  return specific || env.AI_API_KEY;
+}
+
 export function loadEnv(
   source: Record<string, string | undefined> = process.env,
   options: LoadEnvOptions = {},
@@ -238,8 +285,11 @@ export function loadEnv(
     // covers a URL that becomes local after boot, which a startup check could
     // never see.
     // Ollama runs on this machine and has nothing to authenticate against.
-    if (env.AI_PROVIDER !== 'demo' && env.AI_PROVIDER !== 'ollama' && !env.AI_API_KEY) {
-      problems.push(`AI_API_KEY must be set when AI_PROVIDER is "${env.AI_PROVIDER}".`);
+    if (env.AI_PROVIDER !== 'demo' && env.AI_PROVIDER !== 'ollama' && !providerApiKey(env)) {
+      const variable = PROVIDER_KEY_VARIABLE[env.AI_PROVIDER] ?? 'AI_API_KEY';
+      problems.push(
+        `${variable} (or AI_API_KEY) must be set when AI_PROVIDER is "${env.AI_PROVIDER}".`,
+      );
     }
   }
 

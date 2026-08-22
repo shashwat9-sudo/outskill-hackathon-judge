@@ -83,7 +83,7 @@ describe('a successful call', () => {
     const response = await client().run(request());
 
     expect(response.data).toEqual({ verdict: 'works', score: 7 });
-    expect(response.usage).toEqual({ inputTokens: 100, outputTokens: 20 });
+    expect(response.usage).toEqual({ inputTokens: 100, cachedInputTokens: 0, outputTokens: 20, requests: 1 });
     expect(response.modelVersion).toBe('gemini-2.5-flash-lite');
     expect(response.degraded).toBe(false);
   });
@@ -250,7 +250,11 @@ describe('configuration errors', () => {
   });
 
   it('refuses to build a Gemini client with no key', () => {
-    expect(() => createAiClient({ ...CONFIG, apiKey: undefined })).toThrow(/AI_API_KEY is required/);
+    // Names the provider-specific variable, so an operator is told the exact
+    // thing to set rather than the generic one they may not be using.
+    expect(() => createAiClient({ ...CONFIG, apiKey: undefined })).toThrow(
+      /GEMINI_API_KEY is required/,
+    );
   });
 
   it('retries a server error', async () => {
@@ -320,7 +324,7 @@ describe('malformed output', () => {
       .mockResolvedValue(geminiOk({ verdict: 'ok', score: 1 }, { promptTokenCount: 60, candidatesTokenCount: 12 }));
 
     const response = await client().run(request());
-    expect(response.usage).toEqual({ inputTokens: 110, outputTokens: 22 });
+    expect(response.usage).toEqual({ inputTokens: 110, cachedInputTokens: 0, outputTokens: 22, requests: 2 });
   });
 });
 
@@ -375,7 +379,7 @@ describe('the local provider', () => {
     expect(body.format).toBe('json');
     expect(body.options.temperature).toBe(0);
     expect(response.data).toEqual({ verdict: 'local', score: 2 });
-    expect(response.usage).toEqual({ inputTokens: 30, outputTokens: 8 });
+    expect(response.usage).toEqual({ inputTokens: 30, cachedInputTokens: 0, outputTokens: 8, requests: 1 });
   });
 
   it('says how to install a missing model', async () => {
@@ -403,6 +407,9 @@ describe('provider independence', () => {
     for (const provider of ['gemini', 'anthropic', 'openai', 'custom'] as const) {
       const built = createAiClient({
         provider,
+        // OpenAI refuses to default a model — judging a cohort on an unstated
+        // one is exactly the inconsistency the pinned model exists to prevent.
+        model: provider === 'openai' ? 'gpt-5.6-terra' : undefined,
         apiKey: 'k',
         maxRetries: 0,
         timeoutMs: 1_000,
