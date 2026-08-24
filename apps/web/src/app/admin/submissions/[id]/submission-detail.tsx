@@ -32,6 +32,7 @@ import {
   proposeDisqualificationAction,
   reopenSubmissionAction,
   rerunAssessmentAction,
+  retryFeedbackAction,
   resolveManualReviewAction,
   revealCredentialsAction,
   reverseDisqualificationAction,
@@ -83,7 +84,7 @@ export function SubmissionDetail({
       {tab === 'testplan' && <TestPlanTab detail={detail} />}
       {tab === 'evidence' && <EvidenceTab detail={detail} />}
       {tab === 'scores' && <ScoresTab detail={detail} csrfToken={csrfToken} />}
-      {tab === 'feedback' && <FeedbackTab detail={detail} />}
+      {tab === 'feedback' && <FeedbackTab detail={detail} csrfToken={csrfToken} />}
       {tab === 'review' && <ReviewTab detail={detail} csrfToken={csrfToken} />}
       {tab === 'audit' && <AuditTab detail={detail} />}
     </Tabs>
@@ -871,9 +872,83 @@ function EvidenceList({
   );
 }
 
-function FeedbackTab({ detail }: { detail: AdminSubmissionDetail }) {
+/**
+ * Ask for the report to be produced again.
+ *
+ * Records a request rather than generating anything here. Judging runs in the
+ * worker, which holds the AI credential; this tier has none and should not.
+ * Setting the status back to `pending` is the whole action, and the worker
+ * picks it up on its next idle pass.
+ */
+function RetryFeedbackButton({
+  submissionId,
+  csrfToken,
+}: {
+  submissionId: string;
+  csrfToken: string;
+}) {
+  return (
+    <AdminForm
+      action={retryFeedbackAction}
+      csrfToken={csrfToken}
+      submitLabel="Retry feedback generation"
+      // Guards the double-click: the form disables while in flight, and the
+      // action itself is idempotent, so two requests queue one report.
+      confirm="Request the feedback report again? Scores, ranking and evidence are not touched."
+    >
+      <input type="hidden" name="submissionId" value={submissionId} />
+    </AdminForm>
+  );
+}
+
+function FeedbackTab({ detail, csrfToken }: { detail: AdminSubmissionDetail; csrfToken: string }) {
   const report = detail.feedbackReport;
-  if (!report) return <EmptyState title="No feedback report generated yet" />;
+
+  /*
+   * "No feedback report generated yet" described four different situations,
+   * only one of which was "yet": not attempted, in flight, refused, and failed
+   * all looked the same. On the C13 run 43 completed submissions sat in that
+   * message with nothing to act on and no way to tell which was which.
+   */
+  if (!report) {
+    const status = detail.job?.feedbackStatus ?? 'pending';
+
+    if (status === 'generating') {
+      return (
+        <EmptyState title="Generating feedback report…" description="The worker is producing it now. Refresh in a moment." />
+      );
+    }
+
+    if (status === 'failed') {
+      return (
+        <div className="space-y-4">
+          <Alert tone="warning" title="Feedback report generation failed" testId="feedback-failed">
+            <p>
+              The scores, ranking and evidence for this submission are unaffected — only the
+              participant report is missing.
+            </p>
+            {detail.job?.feedbackError && (
+              <p className="mt-2 font-mono text-xs text-muted">{detail.job.feedbackError}</p>
+            )}
+            {typeof detail.job?.feedbackAttempts === 'number' && (
+              <p className="mt-2 text-sm">Attempts so far: {detail.job.feedbackAttempts}.</p>
+            )}
+          </Alert>
+          <RetryFeedbackButton submissionId={detail.submission.id} csrfToken={csrfToken} />
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-4">
+        <EmptyState
+          title="Feedback report pending"
+          description="Judging is complete. The report has not been produced yet — the worker picks these up when its queue is idle."
+        />
+        <RetryFeedbackButton submissionId={detail.submission.id} csrfToken={csrfToken} />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

@@ -28,6 +28,7 @@ import type {
   ConsistencyReview,
   Disqualification,
   FeedbackReport,
+  FeedbackStatus,
   FinalSelection,
   ManualReviewFlag,
   ParticipantView,
@@ -581,6 +582,31 @@ export interface AssessmentStore extends EvidenceStore, JudgingInputStore {
   saveConsistencyReview(review: Omit<ConsistencyReview, 'id'>): Promise<ConsistencyReview>;
   saveFeedbackReport(report: Omit<FeedbackReport, 'id'>): Promise<FeedbackReport>;
   getFeedbackReport(submissionId: string): Promise<FeedbackReport | null>;
+  /**
+   * Record how feedback generation got on. Never touches `stage` — judging and
+   * feedback are separate concerns and are separately observable.
+   */
+  setFeedbackStatus(
+    jobId: string,
+    state: { status: FeedbackStatus; error: string | null; attempts: number },
+  ): Promise<void>;
+  /**
+   * Jobs that finished judging and still owe a report.
+   *
+   * Read by the backfill and by the worker's sweep. Scoped to one cohort so a
+   * maintenance run cannot reach across cohorts by accident.
+   */
+  listJobsNeedingFeedback(cohortId: string): Promise<
+    { jobId: string; submissionId: string; groupNumber: number; productName: string | null }[]
+  >;
+  /**
+   * Jobs whose feedback was requested and not yet produced, across cohorts.
+   *
+   * Read by the worker's idle sweep. `pending` is set either by a fresh job or
+   * by an admin pressing retry — the web tier holds no AI key, so it records
+   * the request and the worker fulfils it.
+   */
+  listPendingFeedbackJobs(limit: number): Promise<{ rows: { jobId: string; submissionId: string }[] }>;
 
   raiseManualReview(flag: Omit<ManualReviewFlag, 'id' | 'createdAt'>): Promise<ManualReviewFlag>;
   resolveManualReview(flagId: string, resolution: { status: 'resolved' | 'dismissed'; note: string; actor: string }): Promise<void>;

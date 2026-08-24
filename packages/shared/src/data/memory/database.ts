@@ -738,6 +738,10 @@ function seedAssessment(
     completedAt: stage === 'completed' ? hoursAgo(3) : null,
     lastError: input.scenario === 'inaccessible' ? 'DNS lookup failed: NXDOMAIN (attempt 3 of 3).' : null,
     nextAttemptAt: null,
+    feedbackStatus: 'pending',
+    feedbackError: null,
+    feedbackAttempts: 0,
+    feedbackUpdatedAt: null,
     createdAt: hoursAgo(4.5),
     updatedAt: DEMO_NOW,
   });

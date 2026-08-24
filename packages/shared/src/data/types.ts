@@ -428,9 +428,30 @@ export interface AssessmentJob {
   completedAt: Date | null;
   lastError: string | null;
   nextAttemptAt: Date | null;
+  /**
+   * How the participant feedback report got on — separately from judging.
+   *
+   * `stage` describes judging and nothing else. A job may legitimately be
+   * `completed` with `feedbackStatus` of `failed`: the scores are real and the
+   * ranking stands, and only the downstream report is missing. Collapsing the
+   * two is what let 43 completed submissions sit with no report and no record
+   * that anything had gone wrong.
+   */
+  feedbackStatus: FeedbackStatus;
+  feedbackError: string | null;
+  feedbackAttempts: number;
+  feedbackUpdatedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
+
+/**
+ * `pending`    nothing attempted yet, or a retry has been requested
+ * `generating` an attempt is in flight
+ * `generated`  a report exists
+ * `failed`     attempts exhausted; `feedbackError` says why
+ */
+export type FeedbackStatus = 'pending' | 'generating' | 'generated' | 'failed';
 
 export type PreflightStatus = 'pass' | 'fail' | 'warn' | 'skipped';
 export type FailureClass = 'timeout' | 'dns' | 'auth' | 'server' | 'blocked' | 'invalid' | 'none';

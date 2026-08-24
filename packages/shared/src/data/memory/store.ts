@@ -1981,6 +1981,44 @@ export class MemoryDataStore implements DataStore {
         return clone(record);
       },
 
+      setFeedbackStatus: async (jobId, state) => {
+        const job = this.db.jobs.find((j) => j.id === jobId);
+        if (!job) return;
+        // `stage` is deliberately untouched — judging and feedback are
+        // separate concerns, and the postgres driver behaves identically.
+        job.feedbackStatus = state.status;
+        job.feedbackError = state.error;
+        job.feedbackAttempts = state.attempts;
+        job.feedbackUpdatedAt = new Date();
+        job.updatedAt = new Date();
+      },
+
+      listPendingFeedbackJobs: async (limit) => {
+        const rows = this.db.jobs
+          .filter((j) => j.stage === 'completed' && j.feedbackStatus === 'pending')
+          .filter((j) => !this.db.feedbackReports.some((f) => f.submissionId === j.submissionId))
+          .slice(0, Math.max(1, limit))
+          .map((j) => ({ jobId: j.id, submissionId: j.submissionId }));
+        return { rows };
+      },
+
+      listJobsNeedingFeedback: async (cohortId) => {
+        return this.db.jobs
+          .filter((j) => j.cohortId === cohortId && j.stage === 'completed')
+          .filter((j) => !this.db.feedbackReports.some((f) => f.submissionId === j.submissionId))
+          .map((j) => {
+            const submission = this.db.submissions.find((s) => s.id === j.submissionId);
+            const team = this.db.teams.find((t) => t.id === submission?.teamId);
+            return {
+              jobId: j.id,
+              submissionId: j.submissionId,
+              groupNumber: team?.groupNumber ?? 0,
+              productName: submission?.productName ?? null,
+            };
+          })
+          .sort((a, b) => a.groupNumber - b.groupNumber);
+      },
+
       getFeedbackReport: async (submissionId) => {
         const report = this.db.feedbackReports.find((r) => r.submissionId === submissionId);
         return report ? clone(report) : null;
@@ -2598,6 +2636,10 @@ export class MemoryDataStore implements DataStore {
       completedAt: null,
       lastError: null,
       nextAttemptAt: null,
+      feedbackStatus: 'pending',
+      feedbackError: null,
+      feedbackAttempts: 0,
+      feedbackUpdatedAt: null,
       createdAt: new Date(),
       updatedAt: new Date(),
     };

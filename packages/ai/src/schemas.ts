@@ -174,18 +174,56 @@ export type FeedbackOutput = z.infer<typeof feedbackOutputSchema>;
  * and this is enforced rather than trusted, because the report is the artefact
  * most likely to be shown to a learner in a future version.
  */
+/*
+ * What a participant must never learn from their feedback: where they placed,
+ * what they were marked, and how they compare to anyone else.
+ *
+ * These were once plain word bans — `\bpoints?\b`, `\bscore[ds]?\b`,
+ * `\bconfidence\b`, `\brank(?:ed|ing)?\b` — and they did not survive contact
+ * with English. "Pain point", "at this point", "users can act with confidence",
+ * "a ranked list of recipes" are ordinary feedback prose that leaks nothing,
+ * and the check rejected the whole report over any one of them. On the C13 run
+ * that silently withheld 43 of 69 reports; every production log line cites the
+ * word "point".
+ *
+ * A control that fires overwhelmingly on false positives does not protect
+ * anybody — it gets the feature switched off, which is exactly what happened,
+ * except nobody decided to switch it off and nobody knew it had been.
+ *
+ * So the judging sense is matched rather than the word. "You scored 61", "61 /
+ * 100", "ranked 7th", "your confidence rating", "top 10", "shortlist",
+ * "winner", "compared to other teams" are all still refused. `feedback-safety
+ * .test.ts` holds both halves: every real leak still caught, and the ordinary
+ * phrasing that used to be rejected now allowed.
+ */
 const FORBIDDEN_IN_FEEDBACK = [
-  /\brank(?:ed|ing)?\b/i,
-  /\bshortlist\b/i,
+  // Placement, in any phrasing that actually states one.
+  /\bshortlist/i,
   /\btop\s*(?:10|ten|four|4)\b/i,
-  /\bscore[ds]?\b/i,
+  /\bwinner\b/i,
+  /\bdisqualif/i,
+  /\brank(?:ed|ing|s)?\s*(?:#|no\.?|number|position)?\s*\d+/i,
+  /\b(?:your|the)\s+rank(?:ing)?\b/i,
+  /\brank(?:ed)?\s+(?:first|second|third|fourth|fifth|highest|lowest|top|bottom|among|against)\b/i,
+
+  // A mark, in any phrasing that actually states one.
   /\b\d{1,3}\s*\/\s*100\b/,
-  /\bpoints?\b/i,
+  /\b(?:your|the|a|an|final|total|overall)\s+scores?\b/i,
+  /\bscored?\s+(?:\d+|highly|well|poorly|low|high)\b/i,
+  /\bscore\s+of\b/i,
+  /\b\d+(?:\.\d+)?\s*(?:out of|\/)\s*\d/i,
+  /\b\d+(?:\.\d+)?\s*points?\b/i,
+  /\b(?:your|the|these|those)\s+points\b/i,
+  /\bmarks?\s+(?:awarded|given|out of)\b/i,
+
+  // How sure the judge was — never the participant's business.
+  /\bconfidence\s*(?:score|level|rating|value)\b/i,
+  /\blow[-\s]confidence\b/i,
+
+  // Anyone else's performance.
   /\bother teams?\b/i,
   /\bcompared to\b/i,
-  /\bwinner\b/i,
-  /\bconfidence\b/i,
-  /\bdisqualif/i,
+  /\brelative to (?:other|the other)\b/i,
 ];
 
 export function validateFeedbackSafety(output: FeedbackOutput): { ok: boolean; problems: string[] } {

@@ -476,6 +476,8 @@ export function mapJob(row: Record<string, unknown>): AssessmentJob {
     startedAt: toDate(row.started_at),
     completedAt: toDate(row.completed_at),
     nextAttemptAt: toDate(row.next_attempt_at),
+    feedbackAttempts: toNumber(row.feedback_attempts),
+    feedbackUpdatedAt: toDate(row.feedback_updated_at),
   };
 }
 

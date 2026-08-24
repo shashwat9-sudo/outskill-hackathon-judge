@@ -31,6 +31,7 @@ const SCHEMA_MIGRATIONS = [
   '0010_partner_cohort_scope',
   '0011_what_got_working',
   '0012_worker_status',
+  '0013_feedback_status',
 ] as const;
 
 /**

@@ -46,6 +46,9 @@ export type JudgmentMethods = Pick<
   | 'saveConsistencyReview'
   | 'saveFeedbackReport'
   | 'getFeedbackReport'
+  | 'setFeedbackStatus'
+  | 'listJobsNeedingFeedback'
+  | 'listPendingFeedbackJobs'
   | 'raiseManualReview'
   | 'resolveManualReview'
   | 'supersedeSystemManualReview'
@@ -370,6 +373,78 @@ export function buildJudgmentMethods(db: SqlDatabase): JudgmentMethods {
         submissionId,
       ]);
       return rows[0] ? mapFeedback(rows[0]) : null;
+    },
+
+    /**
+     * Record how feedback generation got on.
+     *
+     * `stage` is deliberately absent from this statement. Judging and feedback
+     * are separate concerns: a job may be `completed` with a feedback status of
+     * `failed`, and writing the two together is how they came to be conflated
+     * in the first place.
+     */
+    async setFeedbackStatus(jobId, state) {
+      await db.query(
+        `update assessment_jobs
+            set feedback_status = $2,
+                feedback_error = $3,
+                feedback_attempts = $4,
+                feedback_updated_at = now(),
+                updated_at = now()
+          where id = $1`,
+        [jobId, state.status, state.error, state.attempts],
+      );
+    },
+
+    /**
+     * Jobs that finished judging and still owe a report.
+     *
+     * `stage = 'completed'` and no report row. Scoped to one cohort so a
+     * maintenance run cannot reach across cohorts by accident, and ordered by
+     * group number so a backfill is reproducible.
+     */
+    async listPendingFeedbackJobs(limit) {
+      const { rows } = await db.query<{ job_id: string; submission_id: string }>(
+        `select j.id as job_id, j.submission_id
+           from assessment_jobs j
+           join submissions s on s.id = j.submission_id
+      left join feedback_reports f on f.submission_id = s.id
+          where j.stage = 'completed'
+            and j.feedback_status = 'pending'
+            and s.status in ('submitted', 'locked')
+            and f.id is null
+          order by j.feedback_updated_at nulls first, j.created_at
+          limit $1`,
+        [Math.max(1, Math.floor(limit))],
+      );
+      return { rows: rows.map((r) => ({ jobId: r.job_id, submissionId: r.submission_id })) };
+    },
+
+    async listJobsNeedingFeedback(cohortId) {
+      const { rows } = await db.query<{
+        job_id: string;
+        submission_id: string;
+        group_number: number;
+        product_name: string | null;
+      }>(
+        `select j.id as job_id, s.id as submission_id, t.group_number, s.product_name
+           from assessment_jobs j
+           join submissions s on s.id = j.submission_id
+           join teams t on t.id = s.team_id
+      left join feedback_reports f on f.submission_id = s.id
+          where j.cohort_id = $1
+            and j.stage = 'completed'
+            and s.status in ('submitted', 'locked')
+            and f.id is null
+          order by t.group_number`,
+        [cohortId],
+      );
+      return rows.map((r) => ({
+        jobId: r.job_id,
+        submissionId: r.submission_id,
+        groupNumber: toNumber(r.group_number),
+        productName: r.product_name,
+      }));
     },
 
     /**

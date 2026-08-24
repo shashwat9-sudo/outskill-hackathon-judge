@@ -33,20 +33,18 @@ import {
   consistencyOutputSchema,
   consistencyPrompt,
   detectInjection,
-  feedbackOutputSchema,
-  feedbackPrompt,
   redactDeep,
   scoringOutputSchema,
   scoringPrompt,
   shouldRouteToManualReview,
   testPlanOutputSchema,
   testPlanPrompt,
-  validateFeedbackSafety,
   validateScoreCeilings,
   type AiClient,
 } from '@ohj/ai';
 import { runPreflight } from './preflight';
 import { fetchLinkedDeck } from './evidence-fetch';
+import { generateFeedbackForSubmission } from './feedback';
 import { extractPdfText } from './pdf';
 import { runBrowserPlan, summariseRun, type BrowserRunResult } from './browser-runner';
 import type { EvidenceUploader } from './evidence-upload';
@@ -1096,63 +1094,31 @@ async function scoringStage(job: AssessmentJob, ctx: StageContext): Promise<Stag
     });
   }
 
-  await generateFeedback(job, ctx, detail, browserEvidence, response.data.bugsFound);
+  /*
+   * Feedback is produced by the same function the admin retry and the backfill
+   * call, so there is one implementation rather than two that drift.
+   *
+   * Still non-blocking: a job whose feedback could not be produced is judged,
+   * scored and ranked exactly as before. What changed is that the outcome is
+   * now recorded on the job instead of vanishing into a log line — a missing
+   * report is a state somebody can see and retry, not an absence nobody
+   * notices until they open the page.
+   */
+  await generateFeedbackForSubmission(job.submissionId, {
+    store: ctx.store,
+    ai: ctx.ai,
+    log: ctx.log,
+  }).catch((error: unknown) => {
+    ctx.log.error('[feedback-generation-failed]', {
+      submissionId: job.submissionId,
+      stage: 'unexpected',
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
 
   // The consistency pass is selected at the cohort level after ranking, so a
   // single job goes straight to completed here.
   return { stage: 'completed' };
-}
-
-async function generateFeedback(
-  job: AssessmentJob,
-  ctx: StageContext,
-  detail: JudgingInput,
-  browserEvidence: string,
-  bugs: { description: string; severity: string; evidence: string }[],
-): Promise<void> {
-  try {
-    const response = await ctx.ai.run({
-      promptVersion: feedbackPrompt.version,
-      system: feedbackPrompt.system,
-      user: feedbackPrompt.user({
-        productName: detail.submission.productName ?? 'the product',
-        ideaTitle: detail.idea?.title ?? 'unknown',
-        declaredWorkflow: detail.submission.mustHaveWorkflow ?? '',
-        observedBehaviour: browserEvidence,
-        bugsObserved: bugs.map((b) => `${b.description} (${b.evidence})`).join('\n'),
-        teamNextPlan: detail.submission.nextSevenDayPlan ?? '',
-      }),
-      schema: feedbackOutputSchema,
-      correlationId: anonymiseSubmissionId(job.submissionId, detail.cohort.id),
-    });
-
-    // Enforced, not trusted: a report that mentions rank or score is not stored.
-    const safety = validateFeedbackSafety(response.data);
-    if (!safety.ok) {
-      ctx.log.warn('Feedback report withheld — it referenced information participants must not see', {
-        problems: safety.problems,
-      });
-      return;
-    }
-
-    await ctx.store.assessment.saveFeedbackReport({
-      submissionId: job.submissionId,
-      productSummary: response.data.productSummary,
-      strengths: response.data.strengths,
-      improvements: response.data.improvements,
-      bugs: response.data.bugs,
-      nextSevenDayPlan: response.data.nextSevenDayPlan,
-      isExposedToParticipant: false,
-      generatedAt: new Date(),
-      modelVersion: response.modelVersion,
-      promptVersion: response.promptVersion,
-    });
-  } catch (error) {
-    // Feedback is valuable but not load-bearing — never fail a job over it.
-    ctx.log.warn('Feedback generation failed', {
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
 }
 
 // --------------------------------------------------------------------------

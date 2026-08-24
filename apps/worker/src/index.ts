@@ -26,6 +26,7 @@ import {
 } from '@ohj/shared';
 import { createAiClientFromEnv } from '@ohj/ai';
 import { runStage, type StageContext } from './pipeline';
+import { generateFeedbackForSubmission } from './feedback';
 import { createEvidenceUploader } from './evidence-upload';
 import { stalenessLimitMs, startHealthServer, type WorkerHeartbeat } from './health';
 
@@ -296,6 +297,17 @@ async function main(): Promise<void> {
       const reclaimed = await store.assessment.reclaimExpiredLeases();
       if (reclaimed > 0) log.warn('Reclaimed expired leases', { count: reclaimed });
 
+      /*
+       * Anything still owing a participant feedback report.
+       *
+       * Feedback is downstream of judging and must never compete with it, so
+       * this runs only when the queue has nothing to claim — a cohort mid-run
+       * gets the whole worker, and reports are produced in the gaps.
+       *
+       * This is what makes the admin's "Retry feedback generation" work at all.
+       * The web tier holds no AI key, correctly, so it records the request by
+       * setting the status back to `pending` and the worker fulfils it here.
+       */
       const jobs = await store.assessment.claimJobs({
         workerId,
         limit: env.WORKER_CONCURRENCY,
@@ -303,6 +315,7 @@ async function main(): Promise<void> {
       });
 
       if (jobs.length === 0) {
+        await sweepPendingFeedback(store, ai, log);
         await sleep(env.WORKER_POLL_INTERVAL_MS);
         continue;
       }
@@ -368,4 +381,31 @@ if (process.argv[1]?.endsWith('index.ts') || process.argv[1]?.endsWith('index.js
     log.error('Worker crashed', { error: error instanceof Error ? error.message : String(error) });
     process.exitCode = 1;
   });
+}
+
+
+/**
+ * Produce one outstanding feedback report, if any is owed.
+ *
+ * One per idle pass rather than a batch: this shares a worker with judging, and
+ * a backlog of reports must never delay a submission waiting to be assessed.
+ * Nothing here reads or writes a score, a ranking or any evidence.
+ */
+async function sweepPendingFeedback(
+  store: DataStore,
+  ai: ReturnType<typeof createAiClientFromEnv>,
+  log: Logger,
+): Promise<void> {
+  try {
+    const { rows } = await store.assessment.listPendingFeedbackJobs(1);
+    const next = rows[0];
+    if (!next) return;
+
+    await generateFeedbackForSubmission(next.submissionId, { store, ai, log });
+  } catch (error) {
+    // A feedback sweep must never take the poll loop down with it.
+    log.warn('Feedback sweep failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }

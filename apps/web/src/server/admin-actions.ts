@@ -1044,6 +1044,57 @@ export async function rerunAssessmentAction(formData: FormData): Promise<AdminAc
   return { ok: true, message: 'Re-queued. It will be picked up on the next worker poll.' };
 }
 
+/**
+ * Ask for a participant feedback report to be produced again.
+ *
+ * Records the request; it does not generate anything. Judging runs in a
+ * separate worker which holds the AI credential — this tier has none, correctly,
+ * and putting one here to render a button would widen the blast radius of the
+ * internet-facing tier for no gain.
+ *
+ * Touches only the feedback columns. Scores, ranking, shortlist, evidence and
+ * the judging stage are not read or written by this action.
+ */
+export async function retryFeedbackAction(formData: FormData): Promise<AdminActionResult> {
+  await requireAdmin();
+  const unavailable = await requireJudging();
+  if (unavailable) return unavailable;
+  await assertCsrf(String(formData.get('csrf') ?? ''));
+  const submissionId = String(formData.get('submissionId') ?? '');
+  const store = await getStoreAsync();
+
+  const job = await store.assessment.getJobBySubmission(submissionId);
+  if (!job) return { ok: false, error: 'This submission has no assessment job.' };
+
+  /*
+   * Already in flight, so this is a double-click or a second operator. Saying
+   * so beats queueing a second request for the same report.
+   */
+  if (job.feedbackStatus === 'generating') {
+    return { ok: true, message: 'A feedback report is already being generated for this submission.' };
+  }
+
+  const existing = await store.assessment.getFeedbackReport(submissionId);
+  if (existing) {
+    return { ok: true, message: 'This submission already has a feedback report.' };
+  }
+
+  await store.assessment.setFeedbackStatus(job.id, {
+    status: 'pending',
+    error: null,
+    attempts: job.feedbackAttempts,
+  });
+
+  await auditAdminAction({
+    action: 'feedback.retry_requested',
+    entityType: 'submission',
+    entityId: submissionId,
+    cohortId: job.cohortId,
+  });
+  revalidatePath(`/admin/submissions/${submissionId}`);
+  return { ok: true, message: 'Requested. The worker will produce it on its next idle pass.' };
+}
+
 export async function overrideScoreAction(formData: FormData): Promise<AdminActionResult> {
   await requireAdmin();
   const unavailable = await requireJudging();

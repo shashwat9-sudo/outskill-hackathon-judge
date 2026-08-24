@@ -28,6 +28,7 @@ vi.mock('@/server/admin-actions', () => ({
   proposeDisqualificationAction: vi.fn(),
   reopenSubmissionAction: vi.fn(),
   rerunAssessmentAction: vi.fn(),
+  retryFeedbackAction: vi.fn(),
   resolveManualReviewAction: vi.fn(),
   revealCredentialsAction: vi.fn(),
   reverseDisqualificationAction: vi.fn(),
