@@ -194,7 +194,7 @@ export default async function AdminOverviewPage() {
       <Card className="mb-8" testId="cohort-checklist">
         <CardHeader
           title="Run this cohort"
-          description="The sequence from an empty cohort to four finalists. Each step unlocks the next."
+          description={`The sequence from an empty cohort to ${cohort.finalSelectionTarget} recorded winner${cohort.finalSelectionTarget === 1 ? '' : 's'}. Each step unlocks the next.`}
         />
         <ol className="space-y-2">
           {checklist.map((item, index) => (
@@ -419,8 +419,9 @@ function buildChecklist(input: {
     ['open', 'paused', 'closed', 'judging', 'finalised'].includes(cohort.status),
     ['judging', 'finalised'].includes(cohort.status) || input.completedAssessments > 0,
     input.hasSnapshot,
-    input.finalistCount === 4,
+    input.finalistCount === cohort.finalSelectionTarget,
   ];
+  const winners = cohort.finalSelectionTarget;
 
   const definitions: Omit<ChecklistItem, 'state'>[] = [
     {
@@ -460,10 +461,10 @@ function buildChecklist(input: {
       cta: 'Open shortlist',
     },
     {
-      title: 'Select four finalists',
+      title: `Select ${winners} winner${winners === 1 ? '' : 's'}`,
       detail: 'The final decision is yours. Each choice needs a recorded reason.',
       href: '/admin/final-selection',
-      cta: 'Select finalists',
+      cta: 'Select winners',
     },
   ];
 

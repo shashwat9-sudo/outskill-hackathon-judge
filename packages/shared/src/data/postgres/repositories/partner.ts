@@ -1,6 +1,8 @@
 import type { SqlDatabase } from '../client';
 import { DEFAULT_ASSESSMENT_CONFIG } from '../../types';
-import { seedIdeaCatalogue } from '../bootstrap';
+import { seedIdeaCatalogue, seedIdeaCatalogueFrom } from '../bootstrap';
+import { findCohortIdeaCatalogue } from '../../../config/cohort-ideas/index';
+import { DEFAULT_FINAL_SELECTION_TARGET } from '../../../domain/ranking';
 import { encryptSecret, parseEncryptionKey, serialiseEnvelope } from '../../../security/crypto';
 import { RUBRIC_CATEGORIES, RUBRIC_VERSION } from '../../../rubric/index';
 
@@ -218,14 +220,18 @@ export function buildPartnerStore(
         }
 
         const code = (input.code ?? input.externalCohortId).slice(0, 32);
+        // A cohort with a declared catalogue also declares how it is run: its
+        // shortlist size and how many winners a person records.
+        const declared = findCohortIdeaCatalogue(input.externalCohortId);
         const { rows } = await tx.query<{ id: string }>(
           `insert into cohorts
              (name, code, external_cohort_id, day12_start_at, day13_deadline_at,
-              shortlist_target, rubric_version_id, status, assessment_config)
+              shortlist_target, rubric_version_id, status, assessment_config,
+              final_selection_target)
            values ($1,$2,$3,
                    coalesce($4, now()),
                    coalesce($5, now() + interval '2 days'),
-                   coalesce($6, 10), $7, 'closed', $8::jsonb)
+                   coalesce($6::integer, $9::integer), $7, 'closed', $8::jsonb, $10::integer)
            returning id`,
           [
             input.name,
@@ -241,18 +247,25 @@ export function buildPartnerStore(
              * reached a timer as NaN and abandoned every run instantly.
              */
             JSON.stringify(DEFAULT_ASSESSMENT_CONFIG),
+            declared?.settings.shortlistTarget ?? 10,
+            declared?.settings.finalSelectionTarget ?? DEFAULT_FINAL_SELECTION_TARGET,
           ],
         );
 
         /*
-         * Seed the approved ideas with the cohort.
+         * Seed the ideas with the cohort.
          *
          * Without this a synced cohort had no catalogue, so a submission could
          * pass Preview against the canonical list and then fail to link to an
          * idea once the cohort existed. Ops should never have to populate this
          * by hand for a cohort the integration created.
+         *
+         * The declared catalogue for this external id when there is one —
+         * AIAP-C14 must not start life with C13's ideas — and the original
+         * seeds otherwise. Drafts either way; approval is the operator's act.
          */
-        await seedIdeaCatalogue(tx, rows[0]!.id);
+        if (declared) await seedIdeaCatalogueFrom(tx, rows[0]!.id, declared.ideas);
+        else await seedIdeaCatalogue(tx, rows[0]!.id);
 
         return {
           ok: true,

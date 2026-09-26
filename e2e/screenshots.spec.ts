@@ -120,7 +120,7 @@ for (const [device, viewport] of [
       await shoot(page, `${device}-09-shortlist`);
 
       await page.goto('/admin/final-selection');
-      await expect(page.getByRole('heading', { name: 'Select the final four' })).toBeVisible();
+      await expect(page.getByRole('heading', { name: 'Final selection' })).toBeVisible();
       await shoot(page, `${device}-10-finalists`);
 
       await page.goto('/admin/resources');

@@ -51,7 +51,13 @@ import {
   isLearnerFacing,
   resolveLearnerFacingCohort,
 } from '../../domain/cohort-exclusivity';
-import { compareForRanking, type RankableSubmission } from '../../domain/ranking';
+import {
+  DEFAULT_FINAL_SELECTION_TARGET,
+  compareForRanking,
+  validateFinalSelection,
+  type RankableSubmission,
+} from '../../domain/ranking';
+import type { RankedResultRow } from '../../domain/results-export';
 import { type AssessmentStage, type CohortStatus, type SubmissionStatus } from '../../domain/status';
 import { isSubmissionLate } from '../../domain/deadline';
 import { demoAccessCode } from '../../fixtures/demo';
@@ -107,6 +113,7 @@ import type {
   AuditStore,
   CohortStore,
   DataStore,
+  FeedbackCoverage,
   ParticipantStore,
   QueueStats,
   RankedListItem,
@@ -988,6 +995,8 @@ export class MemoryDataStore implements DataStore {
           ...input,
           id: newId(),
           finalisedAt: null,
+          // The historical four unless the caller says otherwise, as in Postgres.
+          finalSelectionTarget: input.finalSelectionTarget ?? DEFAULT_FINAL_SELECTION_TARGET,
           // Cohorts are real unless an operator says otherwise, in memory as in
           // Postgres. The input type cannot carry this field.
           isSynthetic: false,
@@ -2002,6 +2011,23 @@ export class MemoryDataStore implements DataStore {
         return { rows };
       },
 
+      getFeedbackCoverage: async (cohortId): Promise<FeedbackCoverage> => {
+        const completedJobs = this.db.jobs.filter((j) => {
+          if (j.cohortId !== cohortId || j.stage !== 'completed') return false;
+          const submission = this.db.submissions.find((s) => s.id === j.submissionId);
+          return submission?.status === 'submitted' || submission?.status === 'locked';
+        });
+        const coverage: FeedbackCoverage = { completed: completedJobs.length, ready: 0, pending: 0, generating: 0, failed: 0 };
+        for (const job of completedJobs) {
+          const hasReport = this.db.feedbackReports.some((f) => f.submissionId === job.submissionId);
+          if (hasReport) coverage.ready += 1;
+          else if (job.feedbackStatus === 'generating') coverage.generating += 1;
+          else if (job.feedbackStatus === 'failed') coverage.failed += 1;
+          else coverage.pending += 1;
+        }
+        return coverage;
+      },
+
       listJobsNeedingFeedback: async (cohortId) => {
         return this.db.jobs
           .filter((j) => j.cohortId === cohortId && j.stage === 'completed')
@@ -2367,8 +2393,25 @@ export class MemoryDataStore implements DataStore {
        * requires an actor. No worker, stage, or AI response can reach it.
        */
       setFinalSelection: async (cohortId, selections, actor) => {
-        if (selections.length !== 4) {
-          throw new Error(`Exactly 4 winners must be selected; received ${selections.length}.`);
+        const cohort = this.requireCohort(cohortId);
+        const snapshot = this.db.rankingSnapshots.find((s) => s.cohortId === cohortId && s.isCurrent);
+        if (!snapshot) {
+          throw new Error(
+            'There is no current ranking for this cohort, so there is nothing to select from. Generate a ranking first.',
+          );
+        }
+        const eligible = new Set(
+          this.db.rankingEntries.filter((e) => e.snapshotId === snapshot.id).map((e) => e.submissionId),
+        );
+        // The same rule as Postgres: exactly the cohort's target, positions
+        // 1..target, no duplicates, every winner present in the ranking.
+        const validation = validateFinalSelection(
+          selections.map((s) => ({ submissionId: s.submissionId, position: s.position })),
+          eligible,
+          cohort.finalSelectionTarget,
+        );
+        if (!validation.valid) {
+          throw new Error(`Final selection rejected: ${validation.problems.join(' ')}`);
         }
         this.db.finalSelections = this.db.finalSelections.filter((s) => s.cohortId !== cohortId);
         const records: FinalSelection[] = selections.map((selection) => ({
@@ -2386,6 +2429,84 @@ export class MemoryDataStore implements DataStore {
 
       clearFinalSelection: async (cohortId) => {
         this.db.finalSelections = this.db.finalSelections.filter((s) => s.cohortId !== cohortId);
+      },
+
+      /**
+       * The current snapshot with everything the results export reads. Same
+       * shape as the Postgres driver: stored rank and total, effective category
+       * scores, feedback or the reason it is missing, and no secrets.
+       */
+      listRankedResults: async (cohortId) => {
+        const cohort = this.requireCohort(cohortId);
+        const snapshot = this.db.rankingSnapshots.find((s) => s.cohortId === cohortId && s.isCurrent);
+        if (!snapshot) return [];
+
+        return this.db.rankingEntries
+          .filter((e) => e.snapshotId === snapshot.id)
+          .sort((a, b) => a.rank - b.rank)
+          .map((entry): RankedResultRow => {
+            const submission = this.db.submissions.find((s) => s.id === entry.submissionId);
+            const job = this.db.jobs.find((j) => j.submissionId === entry.submissionId);
+            const summary = job ? this.db.summaries.find((s) => s.jobId === job.id) : undefined;
+            const feedback = this.db.feedbackReports.find((f) => f.submissionId === entry.submissionId);
+            const final = this.db.finalSelections.find(
+              (f) => f.cohortId === cohortId && f.submissionId === entry.submissionId,
+            );
+            const dq = this.db.disqualifications
+              .filter((d) => d.submissionId === entry.submissionId)
+              .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
+            const idea = this.db.ideas.find((i) => i.id === submission?.ideaId);
+
+            const categoryScores: RankedResultRow['categoryScores'] = {};
+            if (job) {
+              for (const score of this.db.scores.filter((s) => s.jobId === job.id)) {
+                categoryScores[score.categoryKey] = {
+                  rawScore: score.rawScore,
+                  maxPoints: score.maxPoints,
+                  confidence: score.confidence,
+                  isOverridden: score.isOverridden,
+                };
+              }
+            }
+
+            return {
+              cohortId,
+              cohortName: cohort.name,
+              cohortCode: cohort.code,
+              submissionId: entry.submissionId,
+              groupNumber: this.groupNumberForSubmission(entry.submissionId),
+              productName: submission?.productName ?? null,
+              ideaTitle: idea?.title ?? null,
+              ideaSlug: idea?.slug ?? null,
+              rank: entry.rank,
+              totalScore: entry.totalScore,
+              inShortlist: entry.inShortlist,
+              meanConfidence: entry.meanConfidence,
+              lowConfidence: summary?.lowConfidence ?? false,
+              finalPosition: final?.position ?? null,
+              finalSelectionReason: final?.selectionReason ?? null,
+              assessmentStage: job?.stage ?? null,
+              submissionStatus: submission?.status ?? 'draft',
+              openManualReviewReasons: this.db.manualReviewFlags
+                .filter((f) => f.submissionId === entry.submissionId && f.status === 'open')
+                .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+                .map((f) => f.reasonCode),
+              disqualification: dq
+                ? { status: dq.status, reasonCode: dq.reasonCode, reasonDetail: dq.reasonDetail }
+                : null,
+              productUrl: submission?.productUrl ?? null,
+              loomUrl: submission?.loomUrl ?? null,
+              deckUrl: submission?.deckUrl ?? null,
+              hasUploadedDeck: this.db.artifacts.some(
+                (a) => a.submissionId === entry.submissionId && a.kind === 'deck_pdf',
+              ),
+              categoryScores,
+              feedbackStatus: job?.feedbackStatus ?? 'pending',
+              feedbackError: job?.feedbackError ?? null,
+              feedbackAttempts: job?.feedbackAttempts ?? 0,
+              feedback: feedback ? clone(feedback) : null,
+            };
+          });
       },
     };
   }

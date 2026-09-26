@@ -4,7 +4,7 @@ import { expect, test, type Page } from '@playwright/test';
  * Admin journey.
  *
  * Exercises the paths an operator actually uses: understand the cohort, work
- * the checklist, review evidence, shortlist, choose four.
+ * the checklist, review evidence, shortlist, choose the winners.
  */
 
 const USERNAME = 'outskill-admin';
@@ -116,7 +116,7 @@ test.describe('admin overview', () => {
       'Open submissions',
       'Close submissions and start judging',
       'Review the top 10',
-      'Select four finalists',
+      'Select 3 winners',
     ]) {
       await expect(checklist.getByText(step)).toBeVisible();
     }
@@ -272,7 +272,8 @@ test.describe('shortlist', () => {
     const entries = page.getByTestId('shortlist-entries');
     await expect(entries).toBeVisible();
     await expect(entries.getByRole('link', { name: 'Review evidence' }).first()).toBeVisible();
-    await expect(entries.getByText('Core workflow functionality').first()).toBeVisible();
+    // Rubric v2 names the category "Working core experience".
+    await expect(entries.getByText('Working core experience').first()).toBeVisible();
     await expect(entries.getByText(/confidence \d/).first()).toBeVisible();
   });
 
@@ -288,24 +289,25 @@ test.describe('finalists', () => {
     await signIn(page);
     await adminNav(page).getByRole('link', { name: 'Finalists' }).click();
 
-    await expect(page.getByRole('heading', { name: 'Select the final four', level: 1 })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Final selection', level: 1 })).toBeVisible();
     await expect(
       page.getByText(/The automated judge provides evidence and a private shortlist/),
     ).toBeVisible();
   });
 
-  test('shows four numbered slots, none pre-filled by the system', async ({ page }) => {
+  test('shows one numbered slot per configured winner, none pre-filled by the system', async ({ page }) => {
     await signIn(page);
     await page.goto('/admin/final-selection');
 
     await expect(page.getByTestId('finalist-slots')).toBeVisible();
-    for (const position of [1, 2, 3, 4]) {
+    for (const position of [1, 2, 3]) {
       await expect(page.getByTestId(`finalist-slot-${position}`)).toBeVisible();
     }
-    await expect(page.getByText('0 of 4 selected')).toBeVisible();
+    await expect(page.getByText('0 of 3 selected')).toBeVisible();
+    await expect(page.getByTestId('finalist-slot-4')).toHaveCount(0);
   });
 
-  test('refuses a selection that is not exactly four', async ({ page }) => {
+  test('refuses a selection that is not exactly the cohort target', async ({ page }) => {
     await signIn(page);
     await page.goto('/admin/final-selection');
 
@@ -313,9 +315,9 @@ test.describe('finalists', () => {
     await page.getByLabel('Internal note').first().fill('Strongest working product.');
 
     page.once('dialog', (dialog) => dialog.accept());
-    await page.getByRole('button', { name: 'Confirm final four' }).click();
+    await page.getByRole('button', { name: 'Confirm final selection' }).click();
 
-    await expect(page.getByText(/Choose a submission for all four positions/)).toBeVisible();
+    await expect(page.getByText(/Choose a submission for all 3 positions/)).toBeVisible();
   });
 });
 

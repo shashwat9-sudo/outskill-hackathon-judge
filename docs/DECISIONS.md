@@ -291,3 +291,15 @@ A cohort's stored status can lag reality. If acceptance depended on a reconcilia
 The manual controls live in the same module and are decided the same way: pause is read-only rather than closed, closing early is guarded by a typed `CLOSE SUBMISSIONS` in the admin action, and reopening takes a recorded reason. `validateReopen` refuses a reopen after the official deadline unless it carries an extension — a new deadline or an explicit `accepting_until` — because a reopened cohort without one would read as open while rejecting every save.
 
 **Cost:** the window is recomputed on every write rather than read from a column. At this scale that is arithmetic, not a query, and it removes an entire class of "the cron did not run" failure on the one night it would matter most.
+
+---
+
+### ADR-033 — The number of winners is a cohort setting, not a constant
+
+Every cohort before AIAP C14 recorded a "final four": a constant in the domain code, a `position between 1 and 4` CHECK, four slots on the page, "Final four" in the copy. C14 announces three winners. Replacing the four with a three would have rewritten what every earlier cohort was recorded under, and the cohort after C14 may want something else again.
+
+**Decision:** `cohorts.final_selection_target` (migration 0014), defaulting to 4 so existing rows describe exactly what they were selected under. `validateFinalSelection` takes the cohort's target and enforces exactly N positions, 1..N, no duplicates, all from the current ranking snapshot. The Finalists page renders N slots labelled 1st, 2nd, 3rd … and never says "four"; the settings page exposes the number as "Winners to select". The `final_selections.position` bound is widened to the same 1–100 range as `shortlist_target`; per-cohort exactness lives on the single admin write path (ADR-018), which is unchanged: no worker, stage or model response can record a winner.
+
+**Cost:** one more cohort field to set correctly before a cohort's final day. Mitigated by the readiness check (`scripts/cohort-readiness.ts`) and by the C14 configuration tool, which sets it deliberately and only for the cohort mapped to `AIAP-C14`.
+
+**Also decided here:** ideas belong to a cohort (ADR-013) and a new cohort inherits the previous one's catalogue, which is how C14 came to hold C13's ideas. A declared catalogue per external cohort id (`packages/shared/src/config/cohort-ideas/`) is reconciled with `scripts/configure-cohort-ideas.ts` — dry by default, matching by slug then title so a surviving idea is updated in place, deactivating rather than deleting, and refusing to touch any cohort but the one the identifier maps to. The rubric is not part of an idea and did not change.

@@ -20,7 +20,7 @@ const STEPS = [
   'Import learners and issue access codes',
   'Open submissions',
   'Start automated judging',
-  'Review the top 10 and select four finalists',
+  'Review the top 10 and select the winners',
 ];
 
 export function OnboardingPanel({

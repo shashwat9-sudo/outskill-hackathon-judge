@@ -427,7 +427,39 @@ describe('consistency-pass selection', () => {
 describe('final selection', () => {
   const eligible = new Set(['a', 'b', 'c', 'd', 'e']);
 
-  it('requires exactly four winners', () => {
+  it('requires exactly the cohort target when one is given — three for C14', () => {
+    const three = [
+      { submissionId: 'a', position: 1 },
+      { submissionId: 'b', position: 2 },
+      { submissionId: 'c', position: 3 },
+    ];
+    expect(validateFinalSelection(three, eligible, 3).valid).toBe(true);
+    expect(validateFinalSelection(three.slice(0, 2), eligible, 3).valid).toBe(false);
+    expect(validateFinalSelection([...three, { submissionId: 'd', position: 4 }], eligible, 3).valid).toBe(false);
+    expect(validateFinalSelection([...three, { submissionId: 'd', position: 4 }], eligible, 3).problems.join(' ')).toMatch(
+      /Exactly 3 winners/,
+    );
+    // Positions must be 1..3 even when the count is right.
+    expect(
+      validateFinalSelection(
+        [
+          { submissionId: 'a', position: 1 },
+          { submissionId: 'b', position: 2 },
+          { submissionId: 'c', position: 4 },
+        ],
+        eligible,
+        3,
+      ).problems.join(' '),
+    ).toMatch(/Positions must be exactly 1, 2, 3/);
+  });
+
+  it('refuses a nonsensical target rather than guessing', () => {
+    expect(validateFinalSelection([], eligible, 0).valid).toBe(false);
+    expect(validateFinalSelection([], eligible, 2.5).valid).toBe(false);
+    expect(validateFinalSelection([], eligible, 101).problems.join(' ')).toMatch(/between 1 and 100/);
+  });
+
+  it('defaults to the historical four when no target is given', () => {
     expect(
       validateFinalSelection(
         [

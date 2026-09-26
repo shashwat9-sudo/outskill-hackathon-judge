@@ -9,7 +9,7 @@ import {
 import { describeProviderStatus } from '@ohj/ai';
 import { getCapabilities, getEnvConfig, getStoreAsync } from '@/lib/store';
 import { requireAdmin } from '@/server/admin-auth';
-import { startJudgingAction } from '@/server/admin-actions';
+import { retryMissingFeedbackAction, startJudgingAction } from '@/server/admin-actions';
 import { AdminForm } from '@/components/admin-form';
 import {
   Alert,
@@ -78,11 +78,13 @@ export default async function JudgingPage() {
     );
   }
 
-  const [stats, flags, submissions] = await Promise.all([
+  const [stats, flags, submissions, feedback] = await Promise.all([
     store.assessment.getQueueStats(cohort.id),
     store.assessment.listManualReviewFlags(cohort.id),
     store.submissions.listSubmissions(cohort.id),
+    store.assessment.getFeedbackCoverage(cohort.id),
   ]);
+  const feedbackOutstanding = feedback.pending + feedback.generating + feedback.failed;
 
   const window = evaluateShortlistWindow(cohort.day13DeadlineAt, stats.projectedCompletionAt);
 
@@ -270,6 +272,41 @@ export default async function JudgingPage() {
               </li>
             ))}
           </ul>
+        )}
+      </Card>
+
+      {/* Feedback is downstream of judging and separately retryable; say where it stands. */}
+      <Card className="mb-8" testId="feedback-coverage">
+        <CardHeader
+          title="Participant feedback coverage"
+          description="Every completed assessment is owed a private feedback report, whether or not it is shortlisted. Judging results are never affected by a missing report."
+        />
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+          <Stat label="Completed assessments" value={feedback.completed} />
+          <Stat label="Feedback ready" value={feedback.ready} />
+          <Stat label="Feedback pending" value={feedback.pending} tone={feedback.pending > 0 ? 'attention' : 'default'} />
+          <Stat label="Feedback generating" value={feedback.generating} />
+          <Stat label="Feedback failed" value={feedback.failed} tone={feedback.failed > 0 ? 'attention' : 'default'} />
+        </div>
+        {feedback.completed > 0 && feedbackOutstanding === 0 && (
+          <p className="mt-4 text-sm text-muted">Every completed assessment has a feedback report. ✓</p>
+        )}
+        {feedbackOutstanding > 0 && (
+          <div className="mt-5 border-t border-line pt-4">
+            <AdminForm
+              action={retryMissingFeedbackAction}
+              csrfToken={session.csrfToken}
+              submitLabel="Request missing feedback"
+              submitVariant="secondary"
+              confirm="Request every missing feedback report for this cohort? This only marks them for the worker — scores, ranking and evidence are not touched, and existing reports are kept."
+            >
+              <input type="hidden" name="cohortId" value={cohort.id} />
+              <p className="text-sm text-muted">
+                Re-requests {feedbackOutstanding} report{feedbackOutstanding === 1 ? '' : 's'} for this
+                cohort only. The worker produces them when its queue is idle. Safe to press again.
+              </p>
+            </AdminForm>
+          </div>
         )}
       </Card>
 

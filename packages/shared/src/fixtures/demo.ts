@@ -82,7 +82,14 @@ export const DEMO_SHORTLIST_DUE = demoDayBoundary(2, 10, 0);
 
 export const DEMO_COHORT_ID = id('cohort');
 export const DEMO_MODEL_VERSION = 'demo-fixture-model-1';
-export const DEMO_PROMPT_VERSION = 'assessment-prompts-v1';
+/**
+ * The version the real prompts carry (`PROMPT_VERSION` in `@ohj/ai`).
+ *
+ * Duplicated here as a literal because this package cannot import the AI
+ * package (the dependency runs the other way); `prompt-version.test.ts` in
+ * `@ohj/ai` pins the two together so they cannot drift again.
+ */
+export const DEMO_PROMPT_VERSION = 'assessment-prompts-v2';
 
 export const DEMO_ASSESSMENT_CONFIG: AssessmentConfig = {
   workerConcurrency: 4,
@@ -106,6 +113,11 @@ export const DEMO_COHORT = {
   day12StartAt: DEMO_DAY12_START,
   day13DeadlineAt: DEMO_DEADLINE,
   shortlistTarget: 10,
+  // Three winners, as AIAP C14 runs. The demo ranks exactly three submissions
+  // (complete, login-required, low-confidence), so a person can record a
+  // complete selection from the shortlist. Cohorts created without saying
+  // otherwise still default to the historical four (migration 0014).
+  finalSelectionTarget: 3,
   submissionInstructions:
     'Build only from the approved product ideas below. Submit your live product URL, a PDF pitch deck using the supplied template, and a demo video of three minutes or less. Your submission locks when you press Final Submit — you can edit freely until then.',
   rubricVersion: RUBRIC_VERSION,

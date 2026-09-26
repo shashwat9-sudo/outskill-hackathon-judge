@@ -11,6 +11,7 @@
  * is nothing to call.
  */
 
+import type { RankedResultRow } from '../domain/results-export';
 import type {
   AdminAccount,
   AdminSession,
@@ -296,7 +297,13 @@ export interface CohortStore {
    * a cohort known to contain no learner work.
    */
   createCohort(
-    input: Omit<Cohort, 'id' | 'createdAt' | 'updatedAt' | 'finalisedAt' | 'isSynthetic' | 'externalCohortId'>,
+    input: Omit<
+      Cohort,
+      'id' | 'createdAt' | 'updatedAt' | 'finalisedAt' | 'isSynthetic' | 'externalCohortId' | 'finalSelectionTarget'
+    > & {
+      /** How many winners this cohort records. Defaults to the historical four. */
+      finalSelectionTarget?: number;
+    },
   ): Promise<Cohort>;
   updateCohort(id: string, patch: Partial<Omit<Cohort, 'isSynthetic' | 'externalCohortId'>>): Promise<Cohort>;
   setCohortStatus(id: string, status: CohortStatus): Promise<Cohort>;
@@ -607,6 +614,15 @@ export interface AssessmentStore extends EvidenceStore, JudgingInputStore {
    * the request and the worker fulfils it.
    */
   listPendingFeedbackJobs(limit: number): Promise<{ rows: { jobId: string; submissionId: string }[] }>;
+  /**
+   * How far participant feedback has got for one cohort's completed judging.
+   *
+   * Counts completed jobs only — feedback is only ever owed once judging has
+   * finished — and never hardcodes a cohort size: a cohort of 73, 80 or 96
+   * completed assessments reports 73, 80 or 96. Read before an export so an
+   * operator knows how many reports are still missing.
+   */
+  getFeedbackCoverage(cohortId: string): Promise<FeedbackCoverage>;
 
   raiseManualReview(flag: Omit<ManualReviewFlag, 'id' | 'createdAt'>): Promise<ManualReviewFlag>;
   resolveManualReview(flagId: string, resolution: { status: 'resolved' | 'dismissed'; note: string; actor: string }): Promise<void>;
@@ -632,6 +648,26 @@ export interface AssessmentStore extends EvidenceStore, JudgingInputStore {
   getQueueStats(cohortId: string): Promise<QueueStats>;
 }
 
+/**
+ * Feedback progress across a cohort's completed assessments.
+ *
+ * `ready + pending + generating + failed === completed`. A job that has a
+ * report counts as ready whatever its status column says; the other three
+ * buckets describe completed jobs that still have no report.
+ */
+export interface FeedbackCoverage {
+  /** Jobs whose judging stage is `completed`. */
+  completed: number;
+  /** Completed jobs with a stored feedback report. */
+  ready: number;
+  /** Completed jobs with no report, waiting for the worker's idle sweep. */
+  pending: number;
+  /** Completed jobs with no report and an attempt in flight. */
+  generating: number;
+  /** Completed jobs with no report whose attempts were exhausted. */
+  failed: number;
+}
+
 export interface QueueStats {
   total: number;
   byStage: Record<AssessmentStage, number>;
@@ -654,8 +690,9 @@ export interface RankingStore {
 
   listFinalSelections(cohortId: string): Promise<(FinalSelection & { groupNumber: number; productName: string | null })[]>;
   /**
-   * Set the final four. Admin-action-only: no worker, stage, or AI response has
-   * a call path to this method (ADR-018).
+   * Record the winners — exactly `cohort.finalSelectionTarget` of them.
+   * Admin-action-only: no worker, stage, or AI response has a call path to
+   * this method (ADR-018).
    */
   setFinalSelection(
     cohortId: string,
@@ -663,6 +700,17 @@ export interface RankingStore {
     actor: string,
   ): Promise<FinalSelection[]>;
   clearFinalSelection(cohortId: string, actor: string): Promise<void>;
+  /**
+   * Every entry of the current ranking snapshot with everything the results
+   * export needs: scores per category, feedback (or why it is missing), review
+   * flags, disqualification, winner position and the supporting links.
+   *
+   * Reads the stored snapshot — never recomputes a rank — and never returns a
+   * credential, ciphertext, evidence path or prompt. An entry without a
+   * feedback report is still returned, with its feedback status, so an export
+   * cannot silently drop a product.
+   */
+  listRankedResults(cohortId: string): Promise<RankedResultRow[]>;
 }
 
 export interface RankedListItem {

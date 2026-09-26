@@ -216,7 +216,48 @@ export function selectForConsistencyReview(
 // Final selection
 // --------------------------------------------------------------------------
 
-export const FINAL_SELECTION_COUNT = 4;
+/**
+ * The historical default: every cohort before AIAP C14 recorded a "final four".
+ *
+ * A default, not a rule. The number of winners is a cohort setting
+ * (`Cohort.finalSelectionTarget`, migration 0014) and every caller that knows
+ * the cohort passes its value. This constant exists so a cohort created without
+ * saying otherwise behaves exactly as the earlier ones did.
+ */
+export const DEFAULT_FINAL_SELECTION_TARGET = 4;
+
+/** @deprecated Read `cohort.finalSelectionTarget`. Kept for the historical name. */
+export const FINAL_SELECTION_COUNT = DEFAULT_FINAL_SELECTION_TARGET;
+
+/** The bounds `cohorts.final_selection_target` accepts (migration 0014). */
+export const MIN_FINAL_SELECTION_TARGET = 1;
+export const MAX_FINAL_SELECTION_TARGET = 100;
+
+export function isValidFinalSelectionTarget(value: unknown): value is number {
+  return (
+    typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= MIN_FINAL_SELECTION_TARGET &&
+    value <= MAX_FINAL_SELECTION_TARGET
+  );
+}
+
+/** "1st", "2nd", "3rd", "4th" … for labelling winner positions. */
+export function ordinalPosition(position: number): string {
+  const n = Math.abs(Math.trunc(position));
+  const mod100 = n % 100;
+  if (mod100 >= 11 && mod100 <= 13) return `${n}th`;
+  switch (n % 10) {
+    case 1:
+      return `${n}st`;
+    case 2:
+      return `${n}nd`;
+    case 3:
+      return `${n}rd`;
+    default:
+      return `${n}th`;
+  }
+}
 
 export interface FinalSelectionValidation {
   valid: boolean;
@@ -224,7 +265,10 @@ export interface FinalSelectionValidation {
 }
 
 /**
- * Validate a proposed final four.
+ * Validate a proposed final selection against the cohort's target.
+ *
+ * Exactly `target` winners, positions 1..target with no gaps or duplicates, no
+ * submission twice, every one of them present in the current ranking.
  *
  * Called on the admin action path only. There is deliberately no automated
  * caller anywhere in the codebase — no worker, job stage, or AI response can
@@ -233,16 +277,26 @@ export interface FinalSelectionValidation {
 export function validateFinalSelection(
   selections: readonly { submissionId: string; position: number }[],
   eligibleSubmissionIds: ReadonlySet<string>,
+  target: number = DEFAULT_FINAL_SELECTION_TARGET,
 ): FinalSelectionValidation {
   const problems: string[] = [];
 
-  if (selections.length !== FINAL_SELECTION_COUNT) {
-    problems.push(`Exactly ${FINAL_SELECTION_COUNT} winners must be selected; got ${selections.length}.`);
+  if (!isValidFinalSelectionTarget(target)) {
+    return {
+      valid: false,
+      problems: [
+        `The cohort's winner count (${String(target)}) is not between ${MIN_FINAL_SELECTION_TARGET} and ${MAX_FINAL_SELECTION_TARGET}.`,
+      ],
+    };
+  }
+
+  if (selections.length !== target) {
+    problems.push(`Exactly ${target} winners must be selected; got ${selections.length}.`);
   }
 
   const positions = selections.map((s) => s.position).sort((a, b) => a - b);
-  const expected = Array.from({ length: FINAL_SELECTION_COUNT }, (_, i) => i + 1);
-  if (selections.length === FINAL_SELECTION_COUNT && positions.join(',') !== expected.join(',')) {
+  const expected = Array.from({ length: target }, (_, i) => i + 1);
+  if (selections.length === target && positions.join(',') !== expected.join(',')) {
     problems.push(`Positions must be exactly ${expected.join(', ')} with no duplicates.`);
   }
 

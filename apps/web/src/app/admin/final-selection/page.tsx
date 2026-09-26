@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { JUDGING_UNAVAILABLE_MESSAGE, storeCapabilities } from '@ohj/shared';
+import { JUDGING_UNAVAILABLE_MESSAGE, ordinalPosition, storeCapabilities } from '@ohj/shared';
 import { getStoreAsync } from '@/lib/store';
 import { requireAdmin } from '@/server/admin-auth';
 import { clearFinalSelectionAction, setFinalSelectionAction } from '@/server/admin-actions';
@@ -22,11 +22,16 @@ import {
 export const dynamic = 'force-dynamic';
 
 /**
- * Finalist selection.
+ * Final selection.
  *
  * The only page in the product that records a winner, and the only writer to
- * `final_selections` (ADR-018). The four slots start empty and stay empty until
- * a person fills them — nothing pre-populates them, by design.
+ * `final_selections` (ADR-018). The slots start empty and stay empty until a
+ * person fills them — nothing pre-populates them, by design.
+ *
+ * How many slots there are is the cohort's own setting
+ * (`finalSelectionTarget`): three for AIAP C14, four for the cohorts recorded
+ * before it. The page renders that number and says so in words; it never
+ * assumes "four".
  */
 export default async function FinalistsPage() {
   const session = await requireAdmin();
@@ -38,7 +43,7 @@ export default async function FinalistsPage() {
   if (!storeCapabilities(store).ranking) {
     return (
       <div>
-        <PageHeading title="Finalists" description="The four finalists, chosen by a person." />
+        <PageHeading title="Final selection" description="The winners, chosen by a person." />
         <Alert tone="info" testId="judging-unavailable">
           <p className="font-semibold">{JUDGING_UNAVAILABLE_MESSAGE}</p>
           <p className="mt-2">
@@ -60,17 +65,22 @@ export default async function FinalistsPage() {
     store.ranking.listFinalSelections(cohort.id),
   ]);
 
+  const target = cohort.finalSelectionTarget;
+  const positions = Array.from({ length: target }, (_, index) => index + 1);
   const candidates = snapshot?.entries ?? [];
+  const complete = selections.length === target;
 
   return (
     <div>
       <PageHeading
-        title="Select the final four"
-        description="The automated judge provides evidence and a private shortlist. The Outskill team makes the final decision."
+        title="Final selection"
+        description={`Select exactly ${target} winner${target === 1 ? '' : 's'} for ${cohort.name}. The automated judge provides evidence and a private shortlist. The Outskill team makes the final decision.`}
         actions={
-          <Badge tone={selections.length === 4 ? 'success' : 'neutral'}>
-            {selections.length} of 4 selected
-          </Badge>
+          <span data-testid="final-selection-count">
+            <Badge tone={complete ? 'success' : 'neutral'}>
+              {selections.length} of {target} selected
+            </Badge>
+          </span>
         }
       />
 
@@ -83,7 +93,7 @@ export default async function FinalistsPage() {
       {candidates.length === 0 ? (
         <EmptyState
           title="No ranked candidates yet"
-          description="Generate a private shortlist before choosing finalists."
+          description="Generate a private shortlist before choosing winners."
           action={
             <Link
               href="/admin/ranking"
@@ -96,20 +106,20 @@ export default async function FinalistsPage() {
       ) : (
         <Card className="mb-8">
           <CardHeader
-            title="Four finalist slots"
-            description="Choose a submission for each position. All four are required — a partial selection is refused."
+            title={`${target} winner position${target === 1 ? '' : 's'}`}
+            description={`Choose a submission for each position, ${positions.map(ordinalPosition).join(', ')}. All ${target} are required — a partial selection is refused.`}
           />
 
           <AdminForm
             action={setFinalSelectionAction}
             csrfToken={session.csrfToken}
-            submitLabel="Confirm final four"
-            confirm="Record these four finalists? This is logged, and nothing is announced automatically."
+            submitLabel="Confirm final selection"
+            confirm={`Record these ${target} winner${target === 1 ? '' : 's'}? This is logged, and nothing is announced automatically.`}
           >
             <input type="hidden" name="cohortId" value={cohort.id} />
 
-            <div className="space-y-4" data-testid="finalist-slots">
-              {[1, 2, 3, 4].map((position) => {
+            <div className="space-y-4" data-testid="finalist-slots" data-target={target}>
+              {positions.map((position) => {
                 const current = selections.find((s) => s.position === position);
                 return (
                   <div
@@ -124,7 +134,7 @@ export default async function FinalistsPage() {
                       >
                         {position}
                       </span>
-                      <h3 className="font-bold text-ink">Position {position}</h3>
+                      <h3 className="font-bold text-ink">{ordinalPosition(position)} place</h3>
                       {current && <Badge tone="success">Selected</Badge>}
                     </div>
 
@@ -187,7 +197,7 @@ export default async function FinalistsPage() {
               selections[0] ? new Date(selections[0].selectedAt).toLocaleString() : ''
             }`}
           />
-          <Table caption="Selected finalists">
+          <Table caption="Selected winners">
             <thead>
               <tr>
                 <Th className="w-20">Position</Th>
@@ -199,7 +209,7 @@ export default async function FinalistsPage() {
             <tbody>
               {selections.map((selection) => (
                 <tr key={selection.id}>
-                  <Td className="font-mono font-bold">{selection.position}</Td>
+                  <Td className="font-mono font-bold">{ordinalPosition(selection.position)}</Td>
                   <Td className="font-mono">
                     <Link
                       href={`/admin/submissions/${selection.submissionId}`}
@@ -221,7 +231,7 @@ export default async function FinalistsPage() {
               csrfToken={session.csrfToken}
               submitLabel="Clear selection"
               submitVariant="secondary"
-              confirm="Clear the recorded finalists? This is logged."
+              confirm="Clear the recorded winners? This is logged."
             >
               <input type="hidden" name="cohortId" value={cohort.id} />
             </AdminForm>
@@ -233,7 +243,7 @@ export default async function FinalistsPage() {
         <Card>
           <CardHeader
             title={`Shortlist for reference (top ${snapshot.shortlistTarget})`}
-            description="Open any submission to read the evidence behind its score before deciding."
+            description="Open any submission to read the evidence behind its score before deciding. Winners may be chosen from anywhere in the current ranking, not only the shortlist."
           />
           <Table caption="Shortlisted submissions">
             <thead>

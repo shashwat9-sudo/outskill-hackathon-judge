@@ -9,6 +9,7 @@
 import type { AdminAccount, AdminSession, Cohort, CohortIdea } from '../../types';
 import type { AdminAuthStore, CohortStore } from '../../store';
 import type { CohortStatus } from '../../../domain/status';
+import { DEFAULT_FINAL_SELECTION_TARGET } from '../../../domain/ranking';
 import {
   assessCohortDeletion,
   confirmationMatches,
@@ -256,8 +257,9 @@ export function buildCohortStore(db: SqlDatabase): CohortStore {
           `insert into cohorts
              (name, code, description, timezone, day12_start_at, day13_deadline_at,
               shortlist_target, submission_instructions, rubric_version_id,
-              assessment_config, status, closed_at, closure_type, accepting_until)
-           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+              assessment_config, status, closed_at, closure_type, accepting_until,
+              final_selection_target)
+           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
            returning *`,
           [
             input.name,
@@ -274,6 +276,8 @@ export function buildCohortStore(db: SqlDatabase): CohortStore {
             input.closedAt,
             input.closureType,
             input.acceptingUntil,
+            // The historical four unless the caller says otherwise (0014).
+            input.finalSelectionTarget ?? DEFAULT_FINAL_SELECTION_TARGET,
           ],
         );
         const created = mapRow<Cohort & { rubricVersionId?: string }>(

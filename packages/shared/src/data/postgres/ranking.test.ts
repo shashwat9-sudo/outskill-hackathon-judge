@@ -2,6 +2,7 @@ import { createInMemoryStorage } from './storage';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createTestDatabase, type PgliteHandle } from './testing/pglite';
 import { buildAssessmentStore } from './repositories/assessment';
+import { buildCohortStore } from './repositories/admin';
 import { buildRankingStore } from './repositories/ranking';
 import { seedCohortWithSubmissions } from './testing/assessment-fixtures';
 import { RUBRIC_CATEGORIES, RUBRIC_VERSION } from '../../rubric/index';
@@ -363,5 +364,78 @@ describe('the final four', () => {
     await ranking.clearFinalSelection(cohort.id, 'admin');
 
     expect(await ranking.listFinalSelections(cohort.id)).toEqual([]);
+  });
+
+  it('is the default a cohort is created with', async () => {
+    expect(cohort.finalSelectionTarget).toBe(4);
+  });
+});
+
+describe('a cohort configured for three winners', () => {
+  const pick = (ids: string[]) =>
+    ids.map((submissionId, index) => ({ submissionId, position: index + 1, reason: 'Chosen by the panel.' }));
+
+  beforeEach(async () => {
+    // The cohort's own setting (0014), as C14 is configured.
+    await buildCohortStore(db).updateCohort(cohort.id, { finalSelectionTarget: 3 });
+    await scoreAll();
+    await ranking.generateSnapshot(cohort.id);
+  });
+
+  it('records exactly three, at 1st, 2nd and 3rd', async () => {
+    const ids = submissions.slice(0, 3).map((s) => s.id);
+    const saved = await ranking.setFinalSelection(cohort.id, pick(ids), 'shared-admin');
+    expect(saved).toHaveLength(3);
+    expect((await ranking.listFinalSelections(cohort.id)).map((s) => s.position)).toEqual([1, 2, 3]);
+  });
+
+  it('refuses two, and refuses four', async () => {
+    const ids = submissions.slice(0, 4).map((s) => s.id);
+    await expect(ranking.setFinalSelection(cohort.id, pick(ids.slice(0, 2)), 'a')).rejects.toThrow(/Exactly 3 winners/);
+    await expect(ranking.setFinalSelection(cohort.id, pick(ids), 'a')).rejects.toThrow(/Exactly 3 winners/);
+    expect(await ranking.listFinalSelections(cohort.id)).toEqual([]);
+  });
+
+  it('still refuses the same team in two positions', async () => {
+    const id = submissions[0]!.id;
+    await expect(
+      ranking.setFinalSelection(cohort.id, pick([id, id, submissions[1]!.id]), 'a'),
+    ).rejects.toThrow(/two positions/);
+  });
+
+  it('leaves a cohort still configured for four exactly as before', async () => {
+    const other = (await buildCohortStore(db).createCohort({
+      name: 'Legacy cohort',
+      code: 'LEGACY',
+      description: '',
+      timezone: 'Asia/Kolkata',
+      day12StartAt: new Date(Date.now() - 86_400_000),
+      day13DeadlineAt: new Date(Date.now() + 86_400_000),
+      shortlistTarget: 10,
+      submissionInstructions: '',
+      rubricVersion: 'rubric-v2',
+      assessmentConfig: cohort.assessmentConfig,
+      status: 'draft',
+      closedAt: null,
+      closureType: null,
+      acceptingUntil: null,
+    }));
+    expect(other.finalSelectionTarget).toBe(4);
+    const { rows } = await db.query<{ final_selection_target: number }>(
+      'select final_selection_target from cohorts where id = $1',
+      [other.id],
+    );
+    expect(Number(rows[0]!.final_selection_target)).toBe(4);
+  });
+
+  it('keeps a four-winner selection recorded earlier readable', async () => {
+    // Recorded under the old rule, before the cohort was reconfigured.
+    await db.query('update cohorts set final_selection_target = 4 where id = $1', [cohort.id]);
+    await ranking.setFinalSelection(cohort.id, pick(submissions.slice(0, 4).map((s) => s.id)), 'shared-admin');
+    await buildCohortStore(db).updateCohort(cohort.id, { finalSelectionTarget: 3 });
+
+    const recorded = await ranking.listFinalSelections(cohort.id);
+    expect(recorded.map((s) => s.position)).toEqual([1, 2, 3, 4]);
+    expect((await ranking.listRankedResults(cohort.id)).slice(0, 4).map((r) => r.finalPosition)).toEqual([1, 2, 3, 4]);
   });
 });

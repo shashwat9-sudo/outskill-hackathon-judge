@@ -19,6 +19,7 @@
  */
 
 import type {
+  FeedbackStatus,
   FinalSelection,
   RankingEntry,
   RankingSnapshot,
@@ -27,9 +28,15 @@ import type { RankedListItem, RankingStore } from '../../store';
 import { RowNotFoundError, type SqlClient, type SqlDatabase } from '../client';
 import { json, mapRow, parseJson, toDate, toNumber } from '../rows';
 import { isEligibleForRanking } from '../../../domain/disqualification';
-import { rankSubmissions, type RankableSubmission } from '../../../domain/ranking';
-import { RUBRIC_VERSION, RUBRIC_CATEGORIES } from '../../../rubric/index';
-import { validateFinalSelection } from '../../../domain/ranking';
+import {
+  DEFAULT_FINAL_SELECTION_TARGET,
+  rankSubmissions,
+  validateFinalSelection,
+  type RankableSubmission,
+} from '../../../domain/ranking';
+import { RUBRIC_VERSION, RUBRIC_CATEGORIES, type RubricCategoryKey } from '../../../rubric/index';
+import type { RankedResultRow } from '../../../domain/results-export';
+import { mapFeedback } from './assessment-judgment';
 
 export function buildRankingStore(db: SqlDatabase): RankingStore {
   return {
@@ -188,6 +195,16 @@ export function buildRankingStore(db: SqlDatabase): RankingStore {
      */
     async setFinalSelection(cohortId, selections, actor) {
       return db.transaction(async (tx) => {
+        // How many winners this cohort records is the cohort's own fact
+        // (0014), read inside the transaction so the count validated is the
+        // count that holds when the rows are written.
+        const { rows: cohortRows } = await tx.query<{ final_selection_target: unknown }>(
+          'select final_selection_target from cohorts where id = $1',
+          [cohortId],
+        );
+        if (!cohortRows[0]) throw new RowNotFoundError('cohort', cohortId);
+        const target = toNumber(cohortRows[0].final_selection_target, DEFAULT_FINAL_SELECTION_TARGET);
+
         const { rows: snapshotRows } = await tx.query<{ id: string }>(
           'select id from ranking_snapshots where cohort_id = $1 and is_current limit 1',
           [cohortId],
@@ -208,6 +225,7 @@ export function buildRankingStore(db: SqlDatabase): RankingStore {
         const validation = validateFinalSelection(
           selections.map((s) => ({ submissionId: s.submissionId, position: s.position })),
           eligible,
+          target,
         );
         if (!validation.valid) {
           throw new Error(`Final selection rejected: ${validation.problems.join(' ')}`);
@@ -238,6 +256,160 @@ export function buildRankingStore(db: SqlDatabase): RankingStore {
 
     async clearFinalSelection(cohortId) {
       await db.query('delete from final_selections where cohort_id = $1', [cohortId]);
+    },
+
+    /**
+     * The current snapshot, with everything the results export reads.
+     *
+     * Two statements: one row per ranked entry with its joins, then the
+     * category scores for every job in one `= any($1)` fetch and a regroup in
+     * memory — the same shape `collectRankable` uses, for the same reason.
+     *
+     * The stored rank, total and shortlist flag are returned as stored: an
+     * export must describe the snapshot the decision was made against, not a
+     * recomputation. Category scores come from `category_scores`, whose
+     * `raw_score` already reflects a human override (ADR-012), so the export
+     * shows the effective score the ranking page shows.
+     *
+     * Feedback is a `left join`: an entry without a report is still a row,
+     * carrying the job's feedback status so the file says why it is missing.
+     */
+    async listRankedResults(cohortId) {
+      const { rows } = await db.query<Record<string, unknown>>(
+        `select e.submission_id, e.rank, e.total_score, e.in_shortlist, e.mean_confidence,
+                c.id as cohort_id, c.name as cohort_name, c.code as cohort_code,
+                s.product_name, s.product_url, s.loom_url, s.deck_url,
+                s.status::text as submission_status,
+                t.group_number,
+                i.title as idea_title, i.slug as idea_slug,
+                j.id as job_id, j.stage::text as stage,
+                j.feedback_status, j.feedback_error, j.feedback_attempts,
+                coalesce(sum.low_confidence, false) as low_confidence,
+                f.id as feedback_id, f.submission_id as f_submission_id,
+                f.product_summary, f.strengths, f.improvements, f.bugs,
+                f.next_seven_day_plan, f.is_exposed_to_participant, f.generated_at,
+                f.model_version, f.prompt_version,
+                fs.position as final_position, fs.selection_reason,
+                (
+                  select string_agg(m.reason_code, '|' order by m.created_at)
+                    from manual_review_flags m
+                   where m.submission_id = e.submission_id and m.status = 'open'
+                ) as open_flag_codes,
+                (
+                  select d.status::text from disqualifications d
+                   where d.submission_id = e.submission_id
+                   order by d.created_at desc limit 1
+                ) as dq_status,
+                (
+                  select d.reason_code::text from disqualifications d
+                   where d.submission_id = e.submission_id
+                   order by d.created_at desc limit 1
+                ) as dq_reason_code,
+                (
+                  select d.reason_detail from disqualifications d
+                   where d.submission_id = e.submission_id
+                   order by d.created_at desc limit 1
+                ) as dq_reason_detail,
+                exists (
+                  select 1 from submission_artifacts a
+                   where a.submission_id = e.submission_id and a.kind = 'deck_pdf'
+                ) as has_uploaded_deck
+           from ranking_snapshots snap
+           join ranking_entries e on e.snapshot_id = snap.id
+           join cohorts c on c.id = snap.cohort_id
+           join submissions s on s.id = e.submission_id
+           join teams t on t.id = s.team_id
+           left join cohort_ideas i on i.id = s.idea_id
+           left join assessment_jobs j on j.submission_id = e.submission_id
+           left join assessment_summaries sum on sum.job_id = j.id
+           left join feedback_reports f on f.submission_id = e.submission_id
+           left join final_selections fs
+                  on fs.cohort_id = snap.cohort_id and fs.submission_id = e.submission_id
+          where snap.cohort_id = $1 and snap.is_current
+          order by e.rank`,
+        [cohortId],
+      );
+      if (rows.length === 0) return [];
+
+      const jobIds = rows.map((r) => r.job_id).filter((id): id is string => typeof id === 'string');
+      const scoreRows =
+        jobIds.length === 0
+          ? { rows: [] as Record<string, unknown>[] }
+          : await db.query<Record<string, unknown>>(
+              `select job_id, category_key, raw_score, max_points, confidence, is_overridden
+                 from category_scores where job_id = any($1::uuid[])`,
+              [jobIds],
+            );
+      const scoresByJob = new Map<string, RankedResultRow['categoryScores']>();
+      for (const row of scoreRows.rows) {
+        const jobId = String(row.job_id);
+        const scores = scoresByJob.get(jobId) ?? {};
+        scores[String(row.category_key) as RubricCategoryKey] = {
+          rawScore: toNumber(row.raw_score),
+          maxPoints: toNumber(row.max_points),
+          confidence: toNumber(row.confidence),
+          isOverridden: Boolean(row.is_overridden),
+        };
+        scoresByJob.set(jobId, scores);
+      }
+
+      return rows.map((row): RankedResultRow => {
+        const jobId = typeof row.job_id === 'string' ? row.job_id : null;
+        const dqStatus = (row.dq_status as 'proposed' | 'confirmed' | 'reversed' | null) ?? null;
+        return {
+          cohortId: String(row.cohort_id),
+          cohortName: String(row.cohort_name),
+          cohortCode: String(row.cohort_code),
+          submissionId: String(row.submission_id),
+          groupNumber: toNumber(row.group_number),
+          productName: (row.product_name as string | null) ?? null,
+          ideaTitle: (row.idea_title as string | null) ?? null,
+          ideaSlug: (row.idea_slug as string | null) ?? null,
+          rank: toNumber(row.rank),
+          totalScore: toNumber(row.total_score),
+          inShortlist: Boolean(row.in_shortlist),
+          meanConfidence: toNumber(row.mean_confidence),
+          lowConfidence: Boolean(row.low_confidence),
+          finalPosition: row.final_position === null || row.final_position === undefined
+            ? null
+            : toNumber(row.final_position),
+          finalSelectionReason: (row.selection_reason as string | null) ?? null,
+          assessmentStage: (row.stage as string | null) ?? null,
+          submissionStatus: String(row.submission_status),
+          openManualReviewReasons: row.open_flag_codes ? String(row.open_flag_codes).split('|') : [],
+          disqualification:
+            dqStatus && row.dq_reason_code
+              ? {
+                  status: dqStatus,
+                  reasonCode: String(row.dq_reason_code),
+                  reasonDetail: (row.dq_reason_detail as string | null) ?? '',
+                }
+              : null,
+          productUrl: (row.product_url as string | null) ?? null,
+          loomUrl: (row.loom_url as string | null) ?? null,
+          deckUrl: (row.deck_url as string | null) ?? null,
+          hasUploadedDeck: Boolean(row.has_uploaded_deck),
+          categoryScores: jobId ? (scoresByJob.get(jobId) ?? {}) : {},
+          feedbackStatus: ((row.feedback_status as string | null) ?? 'pending') as FeedbackStatus,
+          feedbackError: (row.feedback_error as string | null) ?? null,
+          feedbackAttempts: toNumber(row.feedback_attempts, 0),
+          feedback: row.feedback_id
+            ? mapFeedback({
+                id: row.feedback_id,
+                submission_id: row.f_submission_id,
+                product_summary: row.product_summary,
+                strengths: row.strengths,
+                improvements: row.improvements,
+                bugs: row.bugs,
+                next_seven_day_plan: row.next_seven_day_plan,
+                is_exposed_to_participant: row.is_exposed_to_participant,
+                generated_at: row.generated_at,
+                model_version: row.model_version,
+                prompt_version: row.prompt_version,
+              })
+            : null,
+        };
+      });
     },
   };
 }

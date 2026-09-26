@@ -258,7 +258,9 @@ describe('store composition', () => {
     for (const name of Object.keys(store.assessment)) {
       expect(typeof (store.assessment as unknown as Record<string, unknown>)[name], name).toBe('function');
     }
-    expect(Object.keys(store.assessment)).toHaveLength(35);
-    expect(Object.keys(store.ranking)).toHaveLength(6);
+    // Every method the interfaces declare, including the feedback bookkeeping
+    // (status, missing, pending, coverage) and the results export read.
+    expect(Object.keys(store.assessment)).toHaveLength(40);
+    expect(Object.keys(store.ranking)).toHaveLength(7);
   });
 });

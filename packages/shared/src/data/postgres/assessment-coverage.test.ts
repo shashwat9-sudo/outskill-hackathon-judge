@@ -64,10 +64,11 @@ describe('the assessment repository', () => {
     const own = await declaredMethods('AssessmentStore');
     const inherited = await declaredMethods('EvidenceStore', './repositories/evidence.ts');
 
-    // 39: the 36 judging methods plus setFeedbackStatus,
-    // listJobsNeedingFeedback and listPendingFeedbackJobs, which record and
-    // find missing participant feedback without touching judging state.
-    expect(own).toHaveLength(39);
+    // 40: the 36 judging methods plus setFeedbackStatus,
+    // listJobsNeedingFeedback, listPendingFeedbackJobs and
+    // getFeedbackCoverage, which record, find and count missing participant
+    // feedback without touching judging state.
+    expect(own).toHaveLength(40);
     // Evidence upload lives in its own file because it is the one part of the
     // assessment surface that needs a Storage credential.
     expect(inherited).toEqual([
@@ -106,9 +107,11 @@ describe('the assessment repository', () => {
 });
 
 describe('the ranking repository', () => {
-  it('implements all 6 methods the interface declares', async () => {
+  it('implements all 7 methods the interface declares', async () => {
     const declared = await declaredMethods('RankingStore');
-    expect(declared).toHaveLength(6);
+    // The six ranking and selection methods plus listRankedResults, which
+    // reads the stored snapshot for the results-and-feedback export.
+    expect(declared).toHaveLength(7);
 
     const implemented = store().ranking as unknown as Record<string, unknown>;
     const missing = declared.filter((name) => typeof implemented[name] !== 'function');

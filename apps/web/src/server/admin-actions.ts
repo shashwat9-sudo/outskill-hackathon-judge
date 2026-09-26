@@ -8,10 +8,18 @@ import {
   buildLearnerMessage,
   buildImportPreview,
   buildInviteCsv,
+  buildResultsFeedbackCsv,
   formatInTimezone,
+  isResultsExportScope,
+  isValidFinalSelectionTarget,
   JUDGING_UNAVAILABLE_MESSAGE,
+  MAX_FINAL_SELECTION_TARGET,
+  MIN_FINAL_SELECTION_TARGET,
   canTransitionCohort,
+  resultsExportFilename,
+  selectResultsForExport,
   storeCapabilities,
+  summariseFeedbackForExport,
   parseLearnerSheet,
   parseTeamImportCsv,
   selectForConsistencyReview,
@@ -22,6 +30,10 @@ import {
   type CohortStatus,
 } from '@ohj/shared';
 import { assertDistributableBaseUrl } from '@ohj/shared';
+// The prompt version stamped on a new cohort must be the version the worker
+// actually judges with. It used to be a literal here, which is how cohorts
+// were recorded as `assessment-prompts-v1` while the prompts were v2.
+import { PROMPT_VERSION } from '@ohj/ai';
 import { getEnvConfig, getStoreAsync } from '@/lib/store';
 import {
   assertCsrf,
@@ -149,7 +161,7 @@ export async function createCohortAction(formData: FormData): Promise<AdminActio
         consistencyTopN: 20,
         lowConfidenceThreshold: 0.6,
         modelVersion: env.AI_MODEL ?? 'unset',
-        promptVersion: 'assessment-prompts-v1',
+        promptVersion: PROMPT_VERSION,
       },
       status: 'draft',
     });
@@ -1261,7 +1273,10 @@ export async function generateRankingAction(formData: FormData): Promise<AdminAc
 }
 
 /**
- * Set the final four.
+ * Record the winners.
+ *
+ * Exactly `cohort.finalSelectionTarget` of them — three for AIAP C14, four for
+ * the cohorts recorded before it — read from the cohort rather than assumed.
  *
  * This is the only path in the codebase that writes a final selection, and it
  * requires an authenticated admin (ADR-018). No worker, stage, or AI response
@@ -1275,7 +1290,12 @@ export async function setFinalSelectionAction(formData: FormData): Promise<Admin
   const store = await getStoreAsync();
   const cohortId = String(formData.get('cohortId') ?? '');
 
-  const selections = [1, 2, 3, 4]
+  const cohort = await store.cohorts.getCohort(cohortId);
+  if (!cohort) return { ok: false, error: 'Cohort not found.' };
+  const target = cohort.finalSelectionTarget;
+  const positions = Array.from({ length: target }, (_, index) => index + 1);
+
+  const selections = positions
     .map((position) => ({
       position,
       submissionId: String(formData.get(`position-${position}`) ?? ''),
@@ -1283,8 +1303,8 @@ export async function setFinalSelectionAction(formData: FormData): Promise<Admin
     }))
     .filter((s) => s.submissionId);
 
-  if (selections.length !== 4) {
-    return { ok: false, error: 'Choose a submission for all four positions.' };
+  if (selections.length !== target) {
+    return { ok: false, error: `Choose a submission for all ${target} positions.` };
   }
   if (selections.some((s) => !s.reason)) {
     return { ok: false, error: 'Give a reason for each winner. This is what makes the decision defensible.' };
@@ -1292,7 +1312,7 @@ export async function setFinalSelectionAction(formData: FormData): Promise<Admin
 
   const snapshot = await store.ranking.getCurrentSnapshot(cohortId);
   const eligible = new Set(snapshot?.entries.map((e) => e.submissionId) ?? []);
-  const validation = validateFinalSelection(selections, eligible);
+  const validation = validateFinalSelection(selections, eligible, target);
   if (!validation.valid) return { ok: false, error: validation.problems.join(' ') };
 
   await store.ranking.setFinalSelection(cohortId, selections, ACTOR);
@@ -1301,10 +1321,17 @@ export async function setFinalSelectionAction(formData: FormData): Promise<Admin
     entityType: 'cohort',
     entityId: cohortId,
     cohortId,
-    after: { positions: selections.map((s) => ({ position: s.position, submissionId: s.submissionId })) },
+    after: {
+      target,
+      positions: selections.map((s) => ({ position: s.position, submissionId: s.submissionId })),
+    },
   });
   revalidatePath('/admin/final-selection');
-  return { ok: true, message: 'Final four recorded. Nothing is announced automatically.' };
+  revalidatePath('/admin');
+  return {
+    ok: true,
+    message: `Final selection recorded: ${target} winner${target === 1 ? '' : 's'}. Nothing is announced automatically.`,
+  };
 }
 
 export async function clearFinalSelectionAction(formData: FormData): Promise<AdminActionResult> {
@@ -1404,6 +1431,129 @@ export async function runConsistencyPassAction(formData: FormData): Promise<Admi
   };
 }
 
+/**
+ * Ask for every missing feedback report in one cohort to be produced.
+ *
+ * The cohort-wide form of `retryFeedbackAction`, for the moment before an
+ * export when three of eighty reports are still missing. Like the per-submission
+ * retry it records the request and generates nothing: this tier holds no AI
+ * key, so it sets the job's feedback status back to `pending` and the worker
+ * fulfils it on its next idle pass.
+ *
+ * Scoped to completed jobs of this cohort that have no report. Never re-runs
+ * judging, never touches a score, a ranking or an existing report, and a
+ * second click finds nothing left to request.
+ */
+export async function retryMissingFeedbackAction(formData: FormData): Promise<AdminActionResult> {
+  await requireAdmin();
+  const unavailable = await requireJudging();
+  if (unavailable) return unavailable;
+  await assertCsrf(String(formData.get('csrf') ?? ''));
+  const cohortId = String(formData.get('cohortId') ?? '');
+  const store = await getStoreAsync();
+
+  const cohort = await store.cohorts.getCohort(cohortId);
+  if (!cohort) return { ok: false, error: 'Cohort not found.' };
+
+  const missing = await store.assessment.listJobsNeedingFeedback(cohortId);
+  let requested = 0;
+  let alreadyQueued = 0;
+  let inFlight = 0;
+
+  for (const item of missing) {
+    const job = await store.assessment.getJob(item.jobId);
+    if (!job || job.cohortId !== cohortId) continue;
+    if (job.feedbackStatus === 'generating') {
+      inFlight += 1;
+      continue;
+    }
+    if (job.feedbackStatus === 'pending') {
+      alreadyQueued += 1;
+      continue;
+    }
+    await store.assessment.setFeedbackStatus(job.id, {
+      status: 'pending',
+      error: null,
+      attempts: job.feedbackAttempts,
+    });
+    requested += 1;
+  }
+
+  await auditAdminAction({
+    action: 'feedback.cohort_retry_requested',
+    entityType: 'cohort',
+    entityId: cohortId,
+    cohortId,
+    after: { missing: missing.length, requested, alreadyQueued, inFlight },
+  });
+  revalidatePath('/admin/assessment-queue');
+  revalidatePath('/admin/ranking');
+
+  if (missing.length === 0) {
+    return { ok: true, message: 'Every completed assessment already has a feedback report.' };
+  }
+  return {
+    ok: true,
+    message:
+      `${missing.length} completed assessment${missing.length === 1 ? '' : 's'} without a report: ` +
+      `${requested} re-requested, ${alreadyQueued} already waiting, ${inFlight} being generated now. ` +
+      'The worker produces them when its queue is idle.',
+  };
+}
+
+/** What the results export can cover. */
+export interface ResultsExportRequest {
+  cohortId: string;
+  scope: 'all' | 'shortlist' | 'top';
+  topN?: number;
+}
+
+/**
+ * The results-and-feedback export: every ranked product, with scores and
+ * feedback, as a CSV file for internal use.
+ *
+ * Admin-only, like every read on this page. Reads the current snapshot as
+ * stored and never a credential, an evidence path or a prompt — the row type
+ * has nowhere to carry one. A product whose feedback is still missing is
+ * exported with its feedback status rather than dropped.
+ */
+export async function exportResultsFeedbackAction(
+  request: ResultsExportRequest,
+): Promise<{ filename: string; csv: string; rows: number }> {
+  await requireAdmin();
+  const store = await getStoreAsync();
+
+  if (!isResultsExportScope(request.scope)) throw new Error('Unknown export scope.');
+  const cohort = await store.cohorts.getCohort(request.cohortId);
+  if (!cohort) throw new Error('Cohort not found.');
+
+  const ranked = await store.ranking.listRankedResults(cohort.id);
+  if (ranked.length === 0) throw new Error('No ranking snapshot exists yet. Generate a shortlist first.');
+
+  const selected = selectResultsForExport(ranked, request.scope, request.topN);
+  const feedback = summariseFeedbackForExport(selected);
+
+  await auditAdminAction({
+    action: 'results.exported',
+    entityType: 'cohort',
+    entityId: cohort.id,
+    cohortId: cohort.id,
+    after: {
+      scope: request.scope,
+      topN: request.scope === 'top' ? request.topN : undefined,
+      rows: selected.length,
+      ranked: ranked.length,
+      feedback,
+    },
+  });
+
+  return {
+    filename: resultsExportFilename(cohort.code),
+    csv: buildResultsFeedbackCsv(selected),
+    rows: selected.length,
+  };
+}
+
 /** Private shortlist export, for internal use only. */
 export async function exportShortlistAction(cohortId: string): Promise<string> {
   await requireAdmin();
@@ -1464,9 +1614,16 @@ export async function updateJudgingSettingsAction(formData: FormData): Promise<A
   const maxAttempts = Math.round(number('maxAttempts', cohort.assessmentConfig.maxAttempts));
   const threshold = number('lowConfidenceThreshold', cohort.assessmentConfig.lowConfidenceThreshold);
   const shortlistTarget = Math.round(number('shortlistTarget', cohort.shortlistTarget));
+  const finalSelectionTarget = Math.round(number('finalSelectionTarget', cohort.finalSelectionTarget));
 
   if (concurrency < 1 || concurrency > 32) {
     return { ok: false, error: 'Concurrent assessments must be between 1 and 32.' };
+  }
+  if (!isValidFinalSelectionTarget(finalSelectionTarget)) {
+    return {
+      ok: false,
+      error: `Winners to select must be between ${MIN_FINAL_SELECTION_TARGET} and ${MAX_FINAL_SELECTION_TARGET}.`,
+    };
   }
   if (browserMinutes < 1 || browserMinutes > 30) {
     return { ok: false, error: 'Maximum browser-testing time must be between 1 and 30 minutes.' };
@@ -1481,10 +1638,15 @@ export async function updateJudgingSettingsAction(formData: FormData): Promise<A
     return { ok: false, error: 'The shortlist size must be between 1 and 100.' };
   }
 
-  const before = { ...cohort.assessmentConfig, shortlistTarget: cohort.shortlistTarget };
+  const before = {
+    ...cohort.assessmentConfig,
+    shortlistTarget: cohort.shortlistTarget,
+    finalSelectionTarget: cohort.finalSelectionTarget,
+  };
 
   await store.cohorts.updateCohort(cohortId, {
     shortlistTarget,
+    finalSelectionTarget,
     assessmentConfig: {
       ...cohort.assessmentConfig,
       workerConcurrency: concurrency,
@@ -1501,14 +1663,16 @@ export async function updateJudgingSettingsAction(formData: FormData): Promise<A
     entityId: cohortId,
     cohortId,
     before,
-    after: { concurrency, browserMinutes, maxAttempts, threshold, shortlistTarget },
+    after: { concurrency, browserMinutes, maxAttempts, threshold, shortlistTarget, finalSelectionTarget },
   });
   revalidatePath('/admin/settings');
   revalidatePath('/admin/assessment-queue');
+  revalidatePath('/admin/final-selection');
+  revalidatePath('/admin');
 
   return {
     ok: true,
-    message: `Saved. Browser testing is limited to ${browserMinutes} minute${browserMinutes === 1 ? '' : 's'} per submission, ${concurrency} at a time.`,
+    message: `Saved. Browser testing is limited to ${browserMinutes} minute${browserMinutes === 1 ? '' : 's'} per submission, ${concurrency} at a time. Shortlist of ${shortlistTarget}; ${finalSelectionTarget} winner${finalSelectionTarget === 1 ? '' : 's'} to select.`,
   };
 }
 

@@ -88,6 +88,11 @@ const ASSESSMENT_METHODS = [
   'reverseDisqualification',
   'listDisqualifications',
   'getQueueStats',
+  'setFeedbackStatus',
+  'listJobsNeedingFeedback',
+  'listPendingFeedbackJobs',
+  'getFeedbackCoverage',
+  'supersedeSystemManualReview',
 ] as const satisfies readonly (keyof AssessmentStore)[];
 
 const RANKING_METHODS = [
@@ -97,6 +102,7 @@ const RANKING_METHODS = [
   'listFinalSelections',
   'setFinalSelection',
   'clearFinalSelection',
+  'listRankedResults',
 ] as const satisfies readonly (keyof RankingStore)[];
 
 export function unavailableAssessmentStore(): AssessmentStore {

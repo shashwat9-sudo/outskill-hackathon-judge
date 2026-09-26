@@ -718,3 +718,53 @@ describe('the idea catalogue a cohort is given', () => {
     expect(report.errors.filter((e) => e.field === 'Category')).toHaveLength(0);
   });
 });
+
+describe('the catalogue a not-yet-mapped C14 sheet is checked against', () => {
+  it("uses the declared AIAP-C14 ideas, not the previous cohort's seeds", async () => {
+    /*
+     * The C14 failure. No cohort was mapped to AIAP-C14, so intake fell back
+     * to the original seed titles and blocked every C14 row with "Category —
+     * Does not match one of the approved ideas". A declared catalogue for the
+     * external id is what a sheet is checked against before the cohort exists.
+     */
+    const rows = sheetRows([
+      { 'Group Number': '1', Category: 'Personal Health Manager', 'Product Name': 'HabitHero' },
+      { 'Group Number': '2', Category: 'Campaign Planner', 'Product Name': 'Plannr' },
+      { 'Group Number': '3', Category: 'Recipe Sharing App', 'Product Name': 'Sizzle' },
+    ]);
+    const report = await syncSheet({
+      store,
+      source: fakeSource(rows),
+      externalCohortId: 'AIAP-C14',
+      cohortName: 'AIAP C14',
+      dryRun: true,
+    });
+
+    expect(report.validRows).toBe(2);
+    expect(report.groups.filter((g) => g.status === 'ready').map((g) => g.category)).toEqual([
+      'personal-health-manager',
+      'campaign-planner',
+    ]);
+    expect(report.errors).toEqual([expect.objectContaining({ groupNumber: 3, field: 'Category' })]);
+  });
+
+  it('gives a cohort the integration creates for AIAP-C14 the C14 ideas and three winners', async () => {
+    const synced = await store.partner!.syncCohort({ externalCohortId: 'AIAP-C14', name: 'AIAP C14' });
+    const ideas = await store.cohorts.listIdeas(synced.cohortId!);
+    expect(ideas.map((i) => i.title)).toEqual([
+      'Personal Health Manager',
+      'Personal Finance Manager',
+      'Collaborative Notetaker',
+      'Task Management App',
+      'AI Interior Makeover',
+      'Resume-to-Interview Coach',
+      'Pet Care Companion',
+      'Campaign Planner',
+    ]);
+    // Drafts: approving them is the operator's act (configure-cohort-ideas.ts).
+    expect(ideas.every((i) => i.definitionStatus === 'draft')).toBe(true);
+    const cohort = await store.cohorts.getCohort(synced.cohortId!);
+    expect(cohort?.finalSelectionTarget).toBe(3);
+    expect(cohort?.shortlistTarget).toBe(10);
+  });
+});

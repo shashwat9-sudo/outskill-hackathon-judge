@@ -228,8 +228,11 @@ describe('a deployment with judging unavailable', () => {
 describe('the gate cannot be silently bypassed', () => {
   it('covers every assessment and ranking method', () => {
     const store = gatedStore();
-    expect(Object.keys(store.assessment)).toHaveLength(35);
-    expect(Object.keys(store.ranking)).toHaveLength(6);
+    // Every method the interfaces declare, including the feedback bookkeeping
+    // and the results export read — a stub missing one would surface as an
+    // unhelpful TypeError rather than the capability message.
+    expect(Object.keys(store.assessment)).toHaveLength(40);
+    expect(Object.keys(store.ranking)).toHaveLength(7);
 
     // A method missing from the unavailable list would be `undefined` and throw
     // a confusing TypeError instead of a clear one.

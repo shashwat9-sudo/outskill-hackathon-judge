@@ -18,6 +18,7 @@
 import type { SqlClient, SqlDatabase } from './client';
 import { RUBRIC_CATEGORIES, RUBRIC_VERSION } from '../../rubric/index';
 import { IDEA_SEEDS } from '../../fixtures/ideas';
+import type { IdeaDefinition } from '../../domain/idea-catalogue';
 import { hashPassword } from '../../security/password';
 import { json } from './rows';
 
@@ -172,8 +173,24 @@ export async function seedIdeaCatalogue(
   db: SqlClient,
   cohortId: string,
 ): Promise<number> {
+  return seedIdeaCatalogueFrom(db, cohortId, IDEA_SEEDS);
+}
+
+/**
+ * Copy a declared catalogue into a cohort, as drafts.
+ *
+ * Used when the partner sync creates a cohort whose external id has a
+ * declared catalogue (`config/cohort-ideas/`), so AIAP-C14 does not start
+ * life with C13's ideas. Drafts, like every other seed: approving them is the
+ * operator's act, done by `scripts/configure-cohort-ideas.ts` (ADR-025).
+ */
+export async function seedIdeaCatalogueFrom(
+  db: SqlClient,
+  cohortId: string,
+  ideas: readonly IdeaDefinition[],
+): Promise<number> {
   let created = 0;
-  for (const seed of IDEA_SEEDS) {
+  for (const seed of ideas) {
     const inserted = await db.query(
       `insert into cohort_ideas
          (cohort_id, title, slug, description, target_user, expected_use_case,

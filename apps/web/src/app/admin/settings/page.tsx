@@ -182,6 +182,22 @@ export default async function SettingsPage() {
                 />
               )}
             </Field>
+            <Field
+              id="finalSelectionTarget"
+              label="Winners to select"
+              hint="How many positions a person fills on the Finalists page (1st, 2nd, 3rd …). Never chosen by the system."
+            >
+              {(aria) => (
+                <Input
+                  {...aria}
+                  name="finalSelectionTarget"
+                  type="number"
+                  min={1}
+                  max={100}
+                  defaultValue={cohort?.finalSelectionTarget ?? 4}
+                />
+              )}
+            </Field>
           </div>
         </AdminForm>
       </Card>

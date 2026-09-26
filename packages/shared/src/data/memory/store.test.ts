@@ -752,9 +752,10 @@ describe('ranking and final selection', () => {
     expect(after[0]?.notes).toBe('After manual review.');
   });
 
-  it('requires exactly four winners', async () => {
+  it('requires exactly the cohort target — three for the demo cohort', async () => {
     const snapshot = await store.ranking.getCurrentSnapshot(DEMO_COHORT_ID);
     const ids = snapshot?.entries.map((e) => e.submissionId) ?? [];
+    expect((await store.cohorts.getCohort(DEMO_COHORT_ID))?.finalSelectionTarget).toBe(3);
 
     await expect(
       store.ranking.setFinalSelection(
@@ -762,21 +763,38 @@ describe('ranking and final selection', () => {
         ids.slice(0, 2).map((submissionId, i) => ({ submissionId, position: i + 1, reason: 'x' })),
         'shared-admin',
       ),
-    ).rejects.toThrow(/Exactly 4/);
+    ).rejects.toThrow(/Exactly 3/);
   });
 
-  it('records who selected the final four', async () => {
-    const selections = [
-      { submissionId: demoSubmissionId(12), position: 1, reason: 'Strongest working product.' },
-      { submissionId: demoSubmissionId(45), position: 2, reason: 'Strong despite the share bug.' },
-      { submissionId: demoSubmissionId(61), position: 3, reason: 'Good core idea.' },
-      { submissionId: demoSubmissionId(33), position: 4, reason: 'Reinstated after review.' },
-    ];
+  it('records who selected the winners, from the current ranking only', async () => {
+    // Winners come from the current snapshot, in memory as in Postgres. The
+    // demo cohort ranks three submissions; group 33 (inaccessible) is not one.
+    const snapshot = await store.ranking.getCurrentSnapshot(DEMO_COHORT_ID);
+    const ranked = snapshot?.entries.map((e) => e.submissionId) ?? [];
+    expect(ranked).toHaveLength(3);
+
+    await expect(
+      store.ranking.setFinalSelection(
+        DEMO_COHORT_ID,
+        [...ranked.slice(0, 2), demoSubmissionId(33)].map((submissionId, i) => ({
+          submissionId,
+          position: i + 1,
+          reason: 'x',
+        })),
+        'shared-admin',
+      ),
+    ).rejects.toThrow(/not eligible/);
+
+    const selections = ranked.map((submissionId, i) => ({
+      submissionId,
+      position: i + 1,
+      reason: `Chosen ${i + 1}.`,
+    }));
     const result = await store.ranking.setFinalSelection(DEMO_COHORT_ID, selections, 'shared-admin');
 
-    expect(result).toHaveLength(4);
+    expect(result).toHaveLength(3);
     expect(result.every((r) => r.selectedBy === 'shared-admin')).toBe(true);
-    expect(result.map((r) => r.position).sort()).toEqual([1, 2, 3, 4]);
+    expect(result.map((r) => r.position).sort()).toEqual([1, 2, 3]);
   });
 });
 

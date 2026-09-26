@@ -28,7 +28,7 @@ import type {
   FeedbackReport,
   ManualReviewFlag,
 } from '../../types';
-import type { AssessmentStore } from '../../store';
+import type { AssessmentStore, FeedbackCoverage } from '../../store';
 import { RowNotFoundError, type SqlDatabase } from '../client';
 import { json, mapRow, parseJson, toDate, toNumber } from '../rows';
 import { getMaxPoints } from '../../../rubric/index';
@@ -49,6 +49,7 @@ export type JudgmentMethods = Pick<
   | 'setFeedbackStatus'
   | 'listJobsNeedingFeedback'
   | 'listPendingFeedbackJobs'
+  | 'getFeedbackCoverage'
   | 'raiseManualReview'
   | 'resolveManualReview'
   | 'supersedeSystemManualReview'
@@ -445,6 +446,42 @@ export function buildJudgmentMethods(db: SqlDatabase): JudgmentMethods {
         groupNumber: toNumber(r.group_number),
         productName: r.product_name,
       }));
+    },
+
+    /**
+     * Feedback progress for one cohort's completed judging, as counts.
+     *
+     * A report on disk counts as `ready` whatever the status column says —
+     * the column was backfilled in 0013 and a report is the fact. Everything
+     * else is bucketed by the job's own status, so `pending + generating +
+     * failed` is exactly what an operator still has to wait for or retry.
+     * The cohort's size is whatever the database says it is.
+     */
+    async getFeedbackCoverage(cohortId): Promise<FeedbackCoverage> {
+      const { rows } = await db.query<Record<string, unknown>>(
+        `select count(*) as completed,
+                count(*) filter (where f.id is not null) as ready,
+                count(*) filter (where f.id is null and j.feedback_status = 'generating') as generating,
+                count(*) filter (where f.id is null and j.feedback_status = 'failed') as failed,
+                count(*) filter (
+                  where f.id is null and j.feedback_status not in ('generating', 'failed')
+                ) as pending
+           from assessment_jobs j
+           join submissions s on s.id = j.submission_id
+      left join feedback_reports f on f.submission_id = s.id
+          where j.cohort_id = $1
+            and j.stage = 'completed'
+            and s.status in ('submitted', 'locked')`,
+        [cohortId],
+      );
+      const row = rows[0] ?? {};
+      return {
+        completed: toNumber(row.completed),
+        ready: toNumber(row.ready),
+        pending: toNumber(row.pending),
+        generating: toNumber(row.generating),
+        failed: toNumber(row.failed),
+      };
     },
 
     /**

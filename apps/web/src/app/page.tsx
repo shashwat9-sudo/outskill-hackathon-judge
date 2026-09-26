@@ -204,7 +204,7 @@ async function DemoHome() {
               <h2 className="text-xl font-bold text-ink">Open the admin workspace</h2>
               <p className="mt-2 text-sm text-muted">
                 Run the cohort: configure ideas, invite teams, monitor judging, review evidence and
-                choose four finalists.
+                choose the winners.
               </p>
               <p className="mt-3 text-sm text-muted">
                 Sign in with <code className="font-mono text-ink">outskill-admin</code> /{' '}

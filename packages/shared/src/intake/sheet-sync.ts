@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import type { DataStore } from '../data/store';
 import { parseCsv } from '../utils/csv';
 import { APPROVED_IDEA_LABELS } from '../fixtures/ideas';
+import { findCohortIdeaCatalogue } from '../config/cohort-ideas/index';
+import { catalogueCategories } from '../domain/idea-catalogue';
 import {
   SHEET_SOURCE,
   parseSheetRows,
@@ -213,7 +215,20 @@ export async function syncSheet(options: SyncOptions): Promise<SyncReport> {
   const cohortIdeas = mapped
     ? (await options.store.cohorts.listIdeas(mapped.id)).map((i) => ({ slug: i.slug, title: i.title }))
     : [];
-  const approvedCategories = cohortIdeas.length > 0 ? cohortIdeas : [...APPROVED_IDEA_LABELS];
+  /*
+   * Before a cohort is mapped, the catalogue declared for this external id
+   * is what the sheet's Category column is checked against — AIAP-C14's eight
+   * ideas for AIAP-C14 — and only a cohort with no declared catalogue falls
+   * back to the original seeds. Otherwise the first Check of a new cohort's
+   * sheet blocks every row for naming an idea the previous cohort never had.
+   */
+  const declared = findCohortIdeaCatalogue(options.externalCohortId);
+  const approvedCategories =
+    cohortIdeas.length > 0
+      ? cohortIdeas
+      : declared
+        ? catalogueCategories(declared.ideas)
+        : [...APPROVED_IDEA_LABELS];
 
   const parsed: ParsedIntakeSheet = parseSheetRows(rows, { approvedCategories });
 

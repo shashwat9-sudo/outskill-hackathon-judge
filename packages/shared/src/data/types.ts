@@ -57,6 +57,16 @@ export interface Cohort {
   day12StartAt: Date;
   day13DeadlineAt: Date;
   shortlistTarget: number;
+  /**
+   * How many winners a person records for this cohort — 1st, 2nd, 3rd, …
+   *
+   * A cohort setting, not a constant: the historical cohorts were run as a
+   * "final four" and stay that way; AIAP C14 announces three. The number of
+   * positions on the Finalists page, the validation on the one write path, and
+   * the exports all read this. Nothing chooses the winners themselves
+   * (ADR-018).
+   */
+  finalSelectionTarget: number;
   submissionInstructions: string;
   rubricVersion: string;
   assessmentConfig: AssessmentConfig;

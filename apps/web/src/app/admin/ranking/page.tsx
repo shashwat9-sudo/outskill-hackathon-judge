@@ -7,11 +7,14 @@ import {
 import { getStoreAsync } from '@/lib/store';
 import { requireAdmin } from '@/server/admin-auth';
 import {
+  exportResultsFeedbackAction,
   exportShortlistAction,
   generateRankingAction,
+  retryMissingFeedbackAction,
   runConsistencyPassAction,
 } from '@/server/admin-actions';
 import { AdminForm, DownloadButton } from '@/components/admin-form';
+import { ResultsExportControls } from './results-export';
 import {
   Alert,
   Badge,
@@ -63,13 +66,17 @@ export default async function ShortlistPage() {
 
   if (!cohort) return <EmptyState title="No cohorts yet" />;
 
-  const [snapshot, snapshots] = await Promise.all([
+  const [snapshot, snapshots, feedback] = await Promise.all([
     store.ranking.getCurrentSnapshot(cohort.id),
     store.ranking.listSnapshots(cohort.id),
+    // Whether the full judged pool has its feedback yet, so nobody exports a
+    // file with three empty reports without knowing.
+    storeCapabilities(store).assessment ? store.assessment.getFeedbackCoverage(cohort.id) : null,
   ]);
 
   const shortlisted = snapshot?.entries.filter((e) => e.entry.inShortlist) ?? [];
   const remainder = snapshot?.entries.filter((e) => !e.entry.inShortlist) ?? [];
+  const feedbackOutstanding = feedback ? feedback.pending + feedback.generating + feedback.failed : 0;
 
   return (
     <div>
@@ -136,6 +143,49 @@ export default async function ShortlistPage() {
         />
       ) : (
         <>
+          <Card className="mb-8" testId="results-feedback-export">
+            <CardHeader
+              title="Results & feedback export"
+              description={`Every product in the current ranking — all ${snapshot.entries.length}, not only the top ${snapshot.shortlistTarget} — with its eight category scores, review state, recorded final-selection position and participant feedback. Products whose feedback is not ready are still included and say so. Internal use only.`}
+              level={3}
+            />
+            {feedback && (
+              <div className="mb-4 rounded-[10px] border border-line bg-canvas p-3.5 text-sm" data-testid="feedback-coverage">
+                <p className="font-semibold text-ink">
+                  Feedback coverage: {feedback.ready} of {feedback.completed} completed assessment
+                  {feedback.completed === 1 ? '' : 's'} ready
+                  {feedbackOutstanding > 0
+                    ? ` · ${feedback.pending} pending · ${feedback.generating} generating · ${feedback.failed} failed`
+                    : ' · none outstanding'}
+                </p>
+                {feedbackOutstanding > 0 && (
+                  <div className="mt-3">
+                    <p className="mb-2 text-muted">
+                      Rows without a report export with their status rather than being dropped. To fill
+                      them first, request the missing reports — the worker produces them when its queue
+                      is idle, without touching any score or rank.
+                    </p>
+                    <AdminForm
+                      action={retryMissingFeedbackAction}
+                      csrfToken={session.csrfToken}
+                      submitLabel="Request missing feedback"
+                      submitVariant="secondary"
+                      confirm="Request every missing feedback report for this cohort? Scores, ranking and evidence are not touched."
+                    >
+                      <input type="hidden" name="cohortId" value={cohort.id} />
+                    </AdminForm>
+                  </div>
+                )}
+              </div>
+            )}
+            <ResultsExportControls
+              cohortId={cohort.id}
+              rankedCount={snapshot.entries.length}
+              shortlistCount={shortlisted.length}
+              action={exportResultsFeedbackAction}
+            />
+          </Card>
+
           <Card className="mb-8">
             <CardHeader
               title={`Top ${shortlisted.length}`}
@@ -262,8 +312,8 @@ export default async function ShortlistPage() {
               </tbody>
             </Table>
             <p className="mt-4 text-xs text-muted">
-              Ties break on core workflow, then solution_usefulness, AI usefulness, learning and execution, then
-              fewer unresolved risks. The tie-break chain is internal.
+              Ties break on core workflow, then solution usefulness, AI usefulness, two-day execution,
+              then fewer unresolved risks. The tie-break chain is internal.
             </p>
           </Disclosure>
 
