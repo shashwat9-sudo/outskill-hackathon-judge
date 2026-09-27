@@ -261,6 +261,6 @@ describe('store composition', () => {
     // Every method the interfaces declare, including the feedback bookkeeping
     // (status, missing, pending, coverage) and the results export read.
     expect(Object.keys(store.assessment)).toHaveLength(40);
-    expect(Object.keys(store.ranking)).toHaveLength(7);
+    expect(Object.keys(store.ranking)).toHaveLength(8);
   });
 });

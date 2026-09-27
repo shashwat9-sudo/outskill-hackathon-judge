@@ -232,7 +232,7 @@ describe('the gate cannot be silently bypassed', () => {
     // and the results export read — a stub missing one would surface as an
     // unhelpful TypeError rather than the capability message.
     expect(Object.keys(store.assessment)).toHaveLength(40);
-    expect(Object.keys(store.ranking)).toHaveLength(7);
+    expect(Object.keys(store.ranking)).toHaveLength(8);
 
     // A method missing from the unavailable list would be `undefined` and throw
     // a confusing TypeError instead of a clear one.

@@ -107,11 +107,12 @@ describe('the assessment repository', () => {
 });
 
 describe('the ranking repository', () => {
-  it('implements all 7 methods the interface declares', async () => {
+  it('implements all 8 methods the interface declares', async () => {
     const declared = await declaredMethods('RankingStore');
     // The six ranking and selection methods plus listRankedResults, which
-    // reads the stored snapshot for the results-and-feedback export.
-    expect(declared).toHaveLength(7);
+    // reads the stored snapshot for the results-and-feedback export, and
+    // listSubmissionAudit, which reads every submission for the audit export.
+    expect(declared).toHaveLength(8);
 
     const implemented = store().ranking as unknown as Record<string, unknown>;
     const missing = declared.filter((name) => typeof implemented[name] !== 'function');

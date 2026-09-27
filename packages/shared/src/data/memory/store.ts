@@ -58,6 +58,7 @@ import {
   type RankableSubmission,
 } from '../../domain/ranking';
 import type { RankedResultRow } from '../../domain/results-export';
+import type { AuditBrowserRun, SubmissionAuditRow } from '../../domain/submission-audit';
 import { type AssessmentStage, type CohortStatus, type SubmissionStatus } from '../../domain/status';
 import { isSubmissionLate } from '../../domain/deadline';
 import { demoAccessCode } from '../../fixtures/demo';
@@ -2501,6 +2502,181 @@ export class MemoryDataStore implements DataStore {
                 (a) => a.submissionId === entry.submissionId && a.kind === 'deck_pdf',
               ),
               categoryScores,
+              feedbackStatus: job?.feedbackStatus ?? 'pending',
+              feedbackError: job?.feedbackError ?? null,
+              feedbackAttempts: job?.feedbackAttempts ?? 0,
+              feedback: feedback ? clone(feedback) : null,
+            };
+          });
+      },
+
+      listSubmissionAudit: async (cohortId) => {
+        const cohort = this.requireCohort(cohortId);
+        const snapshot = this.db.rankingSnapshots.find((s) => s.cohortId === cohortId && s.isCurrent);
+        const threshold =
+          typeof cohort.assessmentConfig?.lowConfidenceThreshold === 'number'
+            ? cohort.assessmentConfig.lowConfidenceThreshold
+            : null;
+
+        return this.db.submissions
+          .filter((s) => s.cohortId === cohortId)
+          .sort((a, b) => this.groupNumberForSubmission(a.id) - this.groupNumberForSubmission(b.id))
+          .map((submission): SubmissionAuditRow => {
+            const job = this.db.jobs.find((j) => j.submissionId === submission.id);
+            const summary = job ? this.db.summaries.find((s) => s.jobId === job.id) : undefined;
+            const feedback = this.db.feedbackReports.find((f) => f.submissionId === submission.id);
+            const entry = snapshot
+              ? this.db.rankingEntries.find((e) => e.snapshotId === snapshot.id && e.submissionId === submission.id)
+              : undefined;
+            const final = this.db.finalSelections.find(
+              (f) => f.cohortId === cohortId && f.submissionId === submission.id,
+            );
+            const dq = this.db.disqualifications
+              .filter((d) => d.submissionId === submission.id)
+              .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
+            const idea = this.db.ideas.find((i) => i.id === submission.ideaId);
+
+            const categoryScores: SubmissionAuditRow['categoryScores'] = {};
+            if (job) {
+              for (const score of this.db.scores.filter((s) => s.jobId === job.id)) {
+                categoryScores[score.categoryKey] = {
+                  rawScore: score.rawScore,
+                  maxPoints: score.maxPoints,
+                  confidence: score.confidence,
+                  isOverridden: score.isOverridden,
+                };
+              }
+            }
+
+            const checks = job ? this.db.preflight.filter((p) => p.jobId === job.id) : [];
+            const latestAttempt = checks.length ? Math.max(...checks.map((c) => c.attemptNumber)) : 0;
+            const artifact = job
+              ? [...this.db.artifactAnalyses]
+                  .filter((a) => a.jobId === job.id)
+                  .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0]
+              : undefined;
+            const plan = job
+              ? [...this.db.testPlans]
+                  .filter((p) => p.jobId === job.id)
+                  .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0]
+              : undefined;
+
+            return {
+              cohortId,
+              cohortName: cohort.name,
+              cohortCode: cohort.code,
+              submissionId: submission.id,
+              groupNumber: this.groupNumberForSubmission(submission.id),
+              productName: submission.productName ?? null,
+              ideaTitle: idea?.title ?? null,
+              ideaSlug: idea?.slug ?? null,
+              submissionStatus: submission.status,
+              loginRequired: Boolean(submission.loginRequired),
+              productUrl: submission.productUrl ?? null,
+              loomUrl: submission.loomUrl ?? null,
+              deckUrl: submission.deckUrl ?? null,
+              lowConfidenceThreshold: threshold,
+              job: job
+                ? {
+                    id: job.id,
+                    stage: job.stage,
+                    attemptCount: job.attemptCount,
+                    maxAttempts: job.maxAttempts,
+                    lastError: job.lastError ?? null,
+                    startedAt: job.startedAt ?? null,
+                    completedAt: job.completedAt ?? null,
+                    updatedAt: job.updatedAt ?? null,
+                  }
+                : null,
+              preflight: checks.length
+                ? {
+                    attempt: latestAttempt,
+                    checks: checks
+                      .filter((c) => c.attemptNumber === latestAttempt)
+                      .map((c) => ({
+                        checkKey: c.checkKey,
+                        status: c.status,
+                        failureClass: c.failureClass,
+                        message: typeof c.detail?.message === 'string' ? c.detail.message : null,
+                      })),
+                  }
+                : null,
+              artifactAnalysis: artifact
+                ? {
+                    deckPageCount: artifact.deckPageCount,
+                    deckTextExtracted: artifact.deckTextExtracted,
+                    videoAnalysisLimited: artifact.videoAnalysisLimited,
+                    videoLimitationReason: artifact.videoLimitationReason,
+                    injectionFlagCount: artifact.injectionFlags.length,
+                  }
+                : null,
+              testPlan: plan
+                ? {
+                    stepCount: plan.stepCount,
+                    validationStatus: plan.validationStatus,
+                    rejectedStepCount: plan.rejectedSteps.length,
+                  }
+                : null,
+              browserRuns: (job ? this.db.browserRuns.filter((r) => r.jobId === job.id) : [])
+                .sort((a, b) => a.attempt - b.attempt || a.startedAt.getTime() - b.startedAt.getTime())
+                .map((run): AuditBrowserRun => {
+                  const steps = this.db.browserSteps
+                    .filter((s) => s.runId === run.id)
+                    .sort((a, b) => a.stepIndex - b.stepIndex);
+                  const failing = steps.find((s) => s.status === 'failed' || s.status === 'error');
+                  return {
+                    attempt: run.attempt,
+                    viewport: run.viewport,
+                    status: run.status,
+                    timedOut: run.timedOut,
+                    durationMs: run.durationMs,
+                    stepsTotal: steps.length,
+                    stepsPassed: steps.filter((s) => s.status === 'passed').length,
+                    stepsFailed: steps.filter((s) => s.status === 'failed').length,
+                    stepsErrored: steps.filter((s) => s.status === 'error').length,
+                    navigationPassed: steps.some((s) => s.action === 'navigate' && s.status === 'passed'),
+                    firstFailure: failing
+                      ? { stepIndex: failing.stepIndex, action: failing.action, errorMessage: failing.errorMessage }
+                      : null,
+                  };
+                }),
+              evidenceCount: job ? this.db.evidence.filter((e) => e.jobId === job.id).length : 0,
+              categoryScores,
+              summary: summary
+                ? {
+                    totalScore: summary.totalScore,
+                    meanConfidence: summary.meanConfidence,
+                    minConfidence: summary.minConfidence,
+                    lowConfidence: summary.lowConfidence,
+                    riskCount: summary.risks.length,
+                  }
+                : null,
+              manualReviewFlags: this.db.manualReviewFlags
+                .filter((f) => f.submissionId === submission.id)
+                .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+                .map((f) => ({
+                  reasonCode: f.reasonCode,
+                  detail: f.detail,
+                  status: f.status,
+                  raisedBy: f.raisedBy,
+                  createdAt: f.createdAt,
+                  resolvedAt: f.resolvedAt,
+                  resolutionNote: f.resolutionNote,
+                })),
+              disqualification: dq
+                ? { status: dq.status, reasonCode: dq.reasonCode, reasonDetail: dq.reasonDetail }
+                : null,
+              ranking: entry
+                ? {
+                    rank: entry.rank,
+                    totalScore: entry.totalScore,
+                    inShortlist: entry.inShortlist,
+                    meanConfidence: entry.meanConfidence,
+                  }
+                : null,
+              rankingGeneratedAt: snapshot?.generatedAt ?? null,
+              finalPosition: final?.position ?? null,
+              finalSelectionReason: final?.selectionReason ?? null,
               feedbackStatus: job?.feedbackStatus ?? 'pending',
               feedbackError: job?.feedbackError ?? null,
               feedbackAttempts: job?.feedbackAttempts ?? 0,

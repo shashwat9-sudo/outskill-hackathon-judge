@@ -303,3 +303,17 @@ Every cohort before AIAP C14 recorded a "final four": a constant in the domain c
 **Cost:** one more cohort field to set correctly before a cohort's final day. Mitigated by the readiness check (`scripts/cohort-readiness.ts`) and by the C14 configuration tool, which sets it deliberately and only for the cohort mapped to `AIAP-C14`.
 
 **Also decided here:** ideas belong to a cohort (ADR-013) and a new cohort inherits the previous one's catalogue, which is how C14 came to hold C13's ideas. A declared catalogue per external cohort id (`packages/shared/src/config/cohort-ideas/`) is reconciled with `scripts/configure-cohort-ideas.ts` — dry by default, matching by slug then title so a surviving idea is updated in place, deactivating rather than deleting, and refusing to touch any cohort but the one the identifier maps to. The rubric is not part of an idea and did not change.
+
+---
+
+### ADR-034 — The audit export starts from submissions, not from the ranking
+
+The results-and-feedback export is defined over the current ranking snapshot, which is right for its purpose and wrong as an inventory: a product whose assessment failed, was diverted to a human or never got a job is not a ranking entry, so it is not in the file, and the file reads as complete. For AIAP C14 that was 12 of 68 products, with no document saying where they went.
+
+**Decision:** a second, separate export — "Export all submissions audit CSV" — whose source is every submission of the cohort, composed with left joins (`listSubmissionAudit`) so a missing record never removes a row. One row per imported submission, always; the results export is unchanged and keeps its meaning.
+
+The "why" columns follow three rules, in code (`packages/shared/src/domain/submission-audit.ts`), not in prose. **Evidence before inference:** the reason comes from the job's explicit error, a preflight check, a browser run or a system-raised flag where one exists, and only otherwise from the trail of stage records; each row names its source and rates the support, and a failure nothing explains says "reason not recorded" rather than a plausible story. **Manual review is not failure:** outcome is the job's own stage, a completed-and-flagged product is `Completed` with `Manual Review = yes`, and feedback is a lifecycle of its own. **Blank is not zero:** a category never validly scored is an empty cell.
+
+The export never re-judges anything, and the row type has nowhere to carry a credential, ciphertext, evidence path or prompt; free text from system records is additionally passed through a redaction step before it becomes a cell.
+
+**Cost:** a second export to explain, and a derivation that can only be as specific as the records are. Where the job records only "failed", the failing stage is inferred from which stage records exist and the row says so — which is the honest answer, and better than a stage column that reads as fact.

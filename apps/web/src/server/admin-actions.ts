@@ -17,6 +17,9 @@ import {
   MIN_FINAL_SELECTION_TARGET,
   canTransitionCohort,
   resultsExportFilename,
+  buildSubmissionsAuditCsv,
+  submissionsAuditFilename,
+  summariseSubmissionAudit,
   selectResultsForExport,
   storeCapabilities,
   summariseFeedbackForExport,
@@ -1552,6 +1555,41 @@ export async function exportResultsFeedbackAction(
     csv: buildResultsFeedbackCsv(selected),
     rows: selected.length,
   };
+}
+
+/**
+ * The all-submissions audit export: every imported submission of the cohort —
+ * completed, failed, in manual review, disqualified, unranked or never queued
+ * — with its judging outcome, why it has no rank, and the evidence that says
+ * so. One row per submission, always; nothing is filtered by ranking.
+ *
+ * Admin-only. Reads existing records only: no job is re-queued, no flag is
+ * touched, no score changes. The row type has nowhere to carry a credential,
+ * an evidence path or a prompt, and every free-text cell from a system record
+ * is sanitised before it is written.
+ *
+ * Returns the CSV text; the page supplies the filename, the same way the
+ * shortlist export works.
+ */
+export async function exportSubmissionsAuditAction(cohortId: string): Promise<string> {
+  await requireAdmin();
+  const store = await getStoreAsync();
+
+  const cohort = await store.cohorts.getCohort(cohortId);
+  if (!cohort) throw new Error('Cohort not found.');
+
+  const rows = await store.ranking.listSubmissionAudit(cohort.id);
+  const summary = summariseSubmissionAudit(rows);
+
+  await auditAdminAction({
+    action: 'submissions_audit.exported',
+    entityType: 'cohort',
+    entityId: cohort.id,
+    cohortId: cohort.id,
+    after: { filename: submissionsAuditFilename(cohort.code), ...summary },
+  });
+
+  return buildSubmissionsAuditCsv(rows);
 }
 
 /** Private shortlist export, for internal use only. */

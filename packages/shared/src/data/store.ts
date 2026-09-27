@@ -12,6 +12,7 @@
  */
 
 import type { RankedResultRow } from '../domain/results-export';
+import type { SubmissionAuditRow } from '../domain/submission-audit';
 import type {
   AdminAccount,
   AdminSession,
@@ -711,6 +712,14 @@ export interface RankingStore {
    * cannot silently drop a product.
    */
   listRankedResults(cohortId: string): Promise<RankedResultRow[]>;
+  /**
+   * Every submission of the cohort — ranked or not, judged or not — with the
+   * stage records, flags, disqualification, ranking entry and feedback that
+   * exist for it, composed with left joins so a missing record never removes
+   * the submission. Read-only, and never returns a credential, ciphertext,
+   * evidence path or prompt.
+   */
+  listSubmissionAudit(cohortId: string): Promise<SubmissionAuditRow[]>;
 }
 
 export interface RankedListItem {

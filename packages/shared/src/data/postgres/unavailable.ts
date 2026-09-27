@@ -103,6 +103,7 @@ const RANKING_METHODS = [
   'setFinalSelection',
   'clearFinalSelection',
   'listRankedResults',
+  'listSubmissionAudit',
 ] as const satisfies readonly (keyof RankingStore)[];
 
 export function unavailableAssessmentStore(): AssessmentStore {

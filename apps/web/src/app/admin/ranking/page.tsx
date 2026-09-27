@@ -3,12 +3,15 @@ import {
   JUDGING_UNAVAILABLE_MESSAGE,
   RUBRIC_CATEGORIES,
   storeCapabilities,
+  submissionsAuditFilename,
+  summariseSubmissionAudit,
 } from '@ohj/shared';
 import { getStoreAsync } from '@/lib/store';
 import { requireAdmin } from '@/server/admin-auth';
 import {
   exportResultsFeedbackAction,
   exportShortlistAction,
+  exportSubmissionsAuditAction,
   generateRankingAction,
   retryMissingFeedbackAction,
   runConsistencyPassAction,
@@ -25,6 +28,7 @@ import {
   Field,
   Input,
   PageHeading,
+  Stat,
   Table,
   Td,
   Th,
@@ -66,17 +70,67 @@ export default async function ShortlistPage() {
 
   if (!cohort) return <EmptyState title="No cohorts yet" />;
 
-  const [snapshot, snapshots, feedback] = await Promise.all([
+  const [snapshot, snapshots, feedback, auditRows] = await Promise.all([
     store.ranking.getCurrentSnapshot(cohort.id),
     store.ranking.listSnapshots(cohort.id),
     // Whether the full judged pool has its feedback yet, so nobody exports a
     // file with three empty reports without knowing.
     storeCapabilities(store).assessment ? store.assessment.getFeedbackCoverage(cohort.id) : null,
+    // Every imported submission, so the page can say where the ones that are
+    // not in the ranking went.
+    store.ranking.listSubmissionAudit(cohort.id),
   ]);
 
   const shortlisted = snapshot?.entries.filter((e) => e.entry.inShortlist) ?? [];
   const remainder = snapshot?.entries.filter((e) => !e.entry.inShortlist) ?? [];
   const feedbackOutstanding = feedback ? feedback.pending + feedback.generating + feedback.failed : 0;
+  const audit = summariseSubmissionAudit(auditRows);
+  const unranked = audit.total - audit.ranked;
+
+  // The audit export and its counts. Rendered whether or not a ranking exists:
+  // a cohort whose judging has not produced a snapshot still has submissions
+  // whose outcomes someone needs to see.
+  const auditCard = (
+    <Card className="mb-8" testId="submissions-audit-export">
+      <CardHeader
+        title="All submissions audit"
+        description="Includes every imported submission, including completed, failed, manual-review and unranked products, with judging outcome details."
+        level={3}
+      />
+      <div className="mb-4 grid gap-4 sm:grid-cols-3 lg:grid-cols-6" data-testid="submissions-audit-summary">
+        <Stat label="Total submissions" value={audit.total} />
+        <Stat label="Ranked" value={audit.ranked} />
+        <Stat label="Failed" value={audit.failed} tone={audit.failed > 0 ? 'attention' : 'default'} />
+        <Stat label="Needs human review" value={audit.needsHumanReview} tone={audit.needsHumanReview > 0 ? 'attention' : 'default'} />
+        <Stat label="Disqualified" value={audit.disqualified} />
+        <Stat
+          label="Incomplete / in progress"
+          value={audit.incomplete + audit.notAssessed + audit.completedUnranked}
+          hint={
+            audit.completedUnranked > 0
+              ? `${audit.completedUnranked} completed but not in the current ranking`
+              : audit.notAssessed > 0
+                ? `${audit.notAssessed} never queued`
+                : undefined
+          }
+        />
+      </div>
+      <p className="mb-4 text-sm text-muted">
+        {unranked > 0
+          ? `${unranked} of ${audit.total} submissions have no rank. Each row of the audit file says what happened during judging, at which stage it stopped, and the recorded evidence for that — never a re-judgement.`
+          : 'Every submission is in the current ranking. The audit file still records each one’s judging outcome and review state.'}
+        {audit.rankedWithOpenFlags > 0
+          ? ` ${audit.rankedWithOpenFlags} ranked product${audit.rankedWithOpenFlags === 1 ? '' : 's'} carry an open manual-review flag; they are ranked, not failed.`
+          : ''}
+      </p>
+      <DownloadButton
+        label="Export all submissions audit CSV"
+        filename={submissionsAuditFilename(cohort.code)}
+        action={exportSubmissionsAuditAction}
+        arg={cohort.id}
+      />
+    </Card>
+  );
 
   return (
     <div>
@@ -137,10 +191,13 @@ export default async function ShortlistPage() {
       </div>
 
       {!snapshot ? (
-        <EmptyState
-          title="No shortlist yet"
-          description="Generate one once assessment has completed for the cohort."
-        />
+        <>
+          <EmptyState
+            title="No shortlist yet"
+            description="Generate one once assessment has completed for the cohort."
+          />
+          <div className="mt-8">{auditCard}</div>
+        </>
       ) : (
         <>
           <Card className="mb-8" testId="results-feedback-export">
@@ -185,6 +242,8 @@ export default async function ShortlistPage() {
               action={exportResultsFeedbackAction}
             />
           </Card>
+
+          {auditCard}
 
           <Card className="mb-8">
             <CardHeader

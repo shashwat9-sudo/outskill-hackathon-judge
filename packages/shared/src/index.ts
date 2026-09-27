@@ -22,6 +22,7 @@ export * from './domain/missing-items';
 export * from './domain/evidence-path';
 export * from './domain/evidence-links';
 export * from './domain/results-export';
+export * from './domain/submission-audit';
 export * from './domain/idea-catalogue';
 export * from './config/cohort-ideas/index';
 export * from './utils/learner-sheet';

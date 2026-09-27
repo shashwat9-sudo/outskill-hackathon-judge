@@ -36,6 +36,12 @@ import {
 } from '../../../domain/ranking';
 import { RUBRIC_VERSION, RUBRIC_CATEGORIES, type RubricCategoryKey } from '../../../rubric/index';
 import type { RankedResultRow } from '../../../domain/results-export';
+import type {
+  AuditBrowserRun,
+  AuditManualReviewFlag,
+  AuditPreflightCheck,
+  SubmissionAuditRow,
+} from '../../../domain/submission-audit';
 import { mapFeedback } from './assessment-judgment';
 
 export function buildRankingStore(db: SqlDatabase): RankingStore {
@@ -390,6 +396,346 @@ export function buildRankingStore(db: SqlDatabase): RankingStore {
           deckUrl: (row.deck_url as string | null) ?? null,
           hasUploadedDeck: Boolean(row.has_uploaded_deck),
           categoryScores: jobId ? (scoresByJob.get(jobId) ?? {}) : {},
+          feedbackStatus: ((row.feedback_status as string | null) ?? 'pending') as FeedbackStatus,
+          feedbackError: (row.feedback_error as string | null) ?? null,
+          feedbackAttempts: toNumber(row.feedback_attempts, 0),
+          feedback: row.feedback_id
+            ? mapFeedback({
+                id: row.feedback_id,
+                submission_id: row.f_submission_id,
+                product_summary: row.product_summary,
+                strengths: row.strengths,
+                improvements: row.improvements,
+                bugs: row.bugs,
+                next_seven_day_plan: row.next_seven_day_plan,
+                is_exposed_to_participant: row.is_exposed_to_participant,
+                generated_at: row.generated_at,
+                model_version: row.model_version,
+                prompt_version: row.prompt_version,
+              })
+            : null,
+        };
+      });
+    },
+
+    /**
+     * Every submission of the cohort, for the all-submissions audit.
+     *
+     * The base statement starts from `submissions` and left-joins everything
+     * else, so a product with no job, no scores or no feedback is still a row.
+     * The per-job stage records (preflight, artifact analysis, test plan,
+     * browser runs, evidence, scores) and the per-submission flags come back
+     * in one `= any($1)` fetch each and are regrouped in memory — the same
+     * shape as `collectRankable`, for the same reason.
+     *
+     * Nothing here reads `submission_credentials`, an evidence path, a trace
+     * path or a prompt; the row type has nowhere to put them.
+     */
+    async listSubmissionAudit(cohortId) {
+      const { rows: baseRows } = await db.query<Record<string, unknown>>(
+        `select c.id as cohort_id, c.name as cohort_name, c.code as cohort_code,
+                c.assessment_config,
+                s.id as submission_id, s.status::text as submission_status,
+                s.product_name, s.product_url, s.loom_url, s.deck_url, s.login_required,
+                s.created_at as submission_created_at,
+                t.group_number,
+                i.title as idea_title, i.slug as idea_slug,
+                j.id as job_id, j.stage::text as stage, j.attempt_count, j.max_attempts,
+                j.last_error, j.started_at, j.completed_at, j.updated_at as job_updated_at,
+                j.feedback_status, j.feedback_error, j.feedback_attempts,
+                sm.total_score as summary_total, sm.mean_confidence as summary_mean,
+                sm.min_confidence as summary_min, sm.low_confidence, sm.risks,
+                snap.generated_at as ranking_generated_at,
+                e.rank, e.total_score as entry_total, e.in_shortlist,
+                e.mean_confidence as entry_mean,
+                fs.position as final_position, fs.selection_reason,
+                f.id as feedback_id, f.submission_id as f_submission_id,
+                f.product_summary, f.strengths, f.improvements, f.bugs,
+                f.next_seven_day_plan, f.is_exposed_to_participant, f.generated_at,
+                f.model_version, f.prompt_version,
+                (
+                  select d.status::text from disqualifications d
+                   where d.submission_id = s.id
+                   order by d.created_at desc limit 1
+                ) as dq_status,
+                (
+                  select d.reason_code::text from disqualifications d
+                   where d.submission_id = s.id
+                   order by d.created_at desc limit 1
+                ) as dq_reason_code,
+                (
+                  select d.reason_detail from disqualifications d
+                   where d.submission_id = s.id
+                   order by d.created_at desc limit 1
+                ) as dq_reason_detail
+           from submissions s
+           join cohorts c on c.id = s.cohort_id
+           left join teams t on t.id = s.team_id
+           left join cohort_ideas i on i.id = s.idea_id
+           left join assessment_jobs j on j.submission_id = s.id
+           left join assessment_summaries sm on sm.job_id = j.id
+           left join ranking_snapshots snap on snap.cohort_id = s.cohort_id and snap.is_current
+           left join ranking_entries e on e.snapshot_id = snap.id and e.submission_id = s.id
+           left join final_selections fs
+                  on fs.cohort_id = s.cohort_id and fs.submission_id = s.id
+           left join feedback_reports f on f.submission_id = s.id
+          where s.cohort_id = $1
+          order by t.group_number, s.created_at`,
+        [cohortId],
+      );
+      if (baseRows.length === 0) return [];
+
+      // Exactly one row per submission, whatever the joins did.
+      const seen = new Set<string>();
+      const rows = baseRows.filter((row) => {
+        const id = String(row.submission_id);
+        if (seen.has(id)) return false;
+        seen.add(id);
+        return true;
+      });
+
+      const submissionIds = rows.map((r) => String(r.submission_id));
+      const jobIds = rows.map((r) => r.job_id).filter((id): id is string => typeof id === 'string');
+
+      const byJob = async <T,>(sql: string): Promise<Map<string, T[]>> => {
+        const map = new Map<string, T[]>();
+        if (jobIds.length === 0) return map;
+        const { rows: found } = await db.query<Record<string, unknown>>(sql, [jobIds]);
+        for (const row of found) {
+          const key = String(row.job_id);
+          const list = map.get(key) ?? [];
+          list.push(row as T);
+          map.set(key, list);
+        }
+        return map;
+      };
+
+      const [scoreRows, preflightRows, artifactRows, planRows, runRows, evidenceRows] = await Promise.all([
+        byJob<Record<string, unknown>>(
+          `select job_id, category_key, raw_score, max_points, confidence, is_overridden
+             from category_scores where job_id = any($1::uuid[])`,
+        ),
+        byJob<Record<string, unknown>>(
+          `select job_id, check_key, status::text as status, attempt_number,
+                  failure_class::text as failure_class, detail
+             from preflight_checks where job_id = any($1::uuid[])
+            order by attempt_number, checked_at`,
+        ),
+        byJob<Record<string, unknown>>(
+          `select job_id, deck_page_count, deck_text_extracted, video_analysis_limited,
+                  video_limitation_reason, injection_flags
+             from artifact_analyses where job_id = any($1::uuid[])
+            order by created_at desc`,
+        ),
+        byJob<Record<string, unknown>>(
+          `select job_id, step_count, validation_status::text as validation_status, rejected_steps
+             from test_plans where job_id = any($1::uuid[])
+            order by created_at desc`,
+        ),
+        byJob<Record<string, unknown>>(
+          `select r.job_id, r.attempt, r.viewport::text as viewport, r.status::text as status,
+                  r.timed_out, r.duration_ms,
+                  (select count(*) from browser_test_steps x where x.run_id = r.id) as steps_total,
+                  (select count(*) from browser_test_steps x
+                    where x.run_id = r.id and x.status = 'passed') as steps_passed,
+                  (select count(*) from browser_test_steps x
+                    where x.run_id = r.id and x.status = 'failed') as steps_failed,
+                  (select count(*) from browser_test_steps x
+                    where x.run_id = r.id and x.status = 'error') as steps_errored,
+                  exists (
+                    select 1 from browser_test_steps x
+                     where x.run_id = r.id and x.action = 'navigate' and x.status = 'passed'
+                  ) as navigation_passed,
+                  (
+                    select x.step_index from browser_test_steps x
+                     where x.run_id = r.id and x.status in ('failed', 'error')
+                     order by x.step_index limit 1
+                  ) as first_failure_index,
+                  (
+                    select x.action from browser_test_steps x
+                     where x.run_id = r.id and x.status in ('failed', 'error')
+                     order by x.step_index limit 1
+                  ) as first_failure_action,
+                  (
+                    select x.error_message from browser_test_steps x
+                     where x.run_id = r.id and x.status in ('failed', 'error')
+                     order by x.step_index limit 1
+                  ) as first_failure_error
+             from browser_test_runs r where r.job_id = any($1::uuid[])
+            order by r.attempt, r.started_at`,
+        ),
+        byJob<Record<string, unknown>>(
+          `select job_id, count(*) as evidence_count
+             from assessment_evidence where job_id = any($1::uuid[]) group by job_id`,
+        ),
+      ]);
+
+      const { rows: flagRows } = await db.query<Record<string, unknown>>(
+        `select submission_id, reason_code, detail, raised_by::text as raised_by, status::text as status,
+                resolved_at, resolution_note, created_at
+           from manual_review_flags where submission_id = any($1::uuid[])
+          order by created_at`,
+        [submissionIds],
+      );
+      const flagsBySubmission = new Map<string, AuditManualReviewFlag[]>();
+      for (const row of flagRows) {
+        const key = String(row.submission_id);
+        const list = flagsBySubmission.get(key) ?? [];
+        list.push({
+          reasonCode: String(row.reason_code),
+          detail: String(row.detail ?? ''),
+          status: String(row.status) as AuditManualReviewFlag['status'],
+          raisedBy: String(row.raised_by),
+          createdAt: toDate(row.created_at) ?? new Date(0),
+          resolvedAt: toDate(row.resolved_at),
+          resolutionNote: (row.resolution_note as string | null) ?? null,
+        });
+        flagsBySubmission.set(key, list);
+      }
+
+      return rows.map((row): SubmissionAuditRow => {
+        const jobId = typeof row.job_id === 'string' ? row.job_id : null;
+        const config = parseJson<{ lowConfidenceThreshold?: unknown }>(row.assessment_config, {});
+        const threshold =
+          typeof config.lowConfidenceThreshold === 'number' ? config.lowConfidenceThreshold : null;
+
+        const categoryScores: SubmissionAuditRow['categoryScores'] = {};
+        for (const score of jobId ? (scoreRows.get(jobId) ?? []) : []) {
+          categoryScores[String(score.category_key) as RubricCategoryKey] = {
+            rawScore: toNumber(score.raw_score),
+            maxPoints: toNumber(score.max_points),
+            confidence: toNumber(score.confidence),
+            isOverridden: Boolean(score.is_overridden),
+          };
+        }
+
+        let preflight: SubmissionAuditRow['preflight'] = null;
+        const checks = jobId ? (preflightRows.get(jobId) ?? []) : [];
+        if (checks.length > 0) {
+          const attempt = Math.max(...checks.map((c) => toNumber(c.attempt_number)));
+          preflight = {
+            attempt,
+            checks: checks
+              .filter((c) => toNumber(c.attempt_number) === attempt)
+              .map((c): AuditPreflightCheck => {
+                const detail = parseJson<{ message?: unknown }>(c.detail, {});
+                return {
+                  checkKey: String(c.check_key),
+                  status: String(c.status) as AuditPreflightCheck['status'],
+                  failureClass: String(c.failure_class) as AuditPreflightCheck['failureClass'],
+                  message: typeof detail.message === 'string' ? detail.message : null,
+                };
+              }),
+          };
+        }
+
+        const artifact = jobId ? artifactRows.get(jobId)?.[0] : undefined;
+        const plan = jobId ? planRows.get(jobId)?.[0] : undefined;
+        const dqStatus = (row.dq_status as 'proposed' | 'confirmed' | 'reversed' | null) ?? null;
+
+        return {
+          cohortId: String(row.cohort_id),
+          cohortName: String(row.cohort_name),
+          cohortCode: String(row.cohort_code),
+          submissionId: String(row.submission_id),
+          groupNumber: toNumber(row.group_number),
+          productName: (row.product_name as string | null) ?? null,
+          ideaTitle: (row.idea_title as string | null) ?? null,
+          ideaSlug: (row.idea_slug as string | null) ?? null,
+          submissionStatus: String(row.submission_status),
+          loginRequired: Boolean(row.login_required),
+          productUrl: (row.product_url as string | null) ?? null,
+          loomUrl: (row.loom_url as string | null) ?? null,
+          deckUrl: (row.deck_url as string | null) ?? null,
+          lowConfidenceThreshold: threshold,
+          job: jobId
+            ? {
+                id: jobId,
+                stage: String(row.stage),
+                attemptCount: toNumber(row.attempt_count),
+                maxAttempts: toNumber(row.max_attempts),
+                lastError: (row.last_error as string | null) ?? null,
+                startedAt: toDate(row.started_at),
+                completedAt: toDate(row.completed_at),
+                updatedAt: toDate(row.job_updated_at),
+              }
+            : null,
+          preflight,
+          artifactAnalysis: artifact
+            ? {
+                deckPageCount:
+                  artifact.deck_page_count === null || artifact.deck_page_count === undefined
+                    ? null
+                    : toNumber(artifact.deck_page_count),
+                deckTextExtracted: Boolean(artifact.deck_text_extracted),
+                videoAnalysisLimited: Boolean(artifact.video_analysis_limited),
+                videoLimitationReason: (artifact.video_limitation_reason as string | null) ?? null,
+                injectionFlagCount: parseJson<unknown[]>(artifact.injection_flags, []).length,
+              }
+            : null,
+          testPlan: plan
+            ? {
+                stepCount: toNumber(plan.step_count),
+                validationStatus: String(plan.validation_status),
+                rejectedStepCount: parseJson<unknown[]>(plan.rejected_steps, []).length,
+              }
+            : null,
+          browserRuns: (jobId ? (runRows.get(jobId) ?? []) : []).map(
+            (r): AuditBrowserRun => ({
+              attempt: toNumber(r.attempt),
+              viewport: String(r.viewport),
+              status: String(r.status) as AuditBrowserRun['status'],
+              timedOut: Boolean(r.timed_out),
+              durationMs: r.duration_ms === null || r.duration_ms === undefined ? null : toNumber(r.duration_ms),
+              stepsTotal: toNumber(r.steps_total),
+              stepsPassed: toNumber(r.steps_passed),
+              stepsFailed: toNumber(r.steps_failed),
+              stepsErrored: toNumber(r.steps_errored),
+              navigationPassed: Boolean(r.navigation_passed),
+              firstFailure:
+                r.first_failure_index === null || r.first_failure_index === undefined
+                  ? null
+                  : {
+                      stepIndex: toNumber(r.first_failure_index),
+                      action: String(r.first_failure_action ?? ''),
+                      errorMessage: (r.first_failure_error as string | null) ?? null,
+                    },
+            }),
+          ),
+          evidenceCount: jobId ? toNumber(evidenceRows.get(jobId)?.[0]?.evidence_count) : 0,
+          categoryScores,
+          summary:
+            row.summary_total === null || row.summary_total === undefined
+              ? null
+              : {
+                  totalScore: toNumber(row.summary_total),
+                  meanConfidence: toNumber(row.summary_mean),
+                  minConfidence: toNumber(row.summary_min),
+                  lowConfidence: Boolean(row.low_confidence),
+                  riskCount: parseJson<unknown[]>(row.risks, []).length,
+                },
+          manualReviewFlags: flagsBySubmission.get(String(row.submission_id)) ?? [],
+          disqualification:
+            dqStatus && row.dq_reason_code
+              ? {
+                  status: dqStatus,
+                  reasonCode: String(row.dq_reason_code),
+                  reasonDetail: (row.dq_reason_detail as string | null) ?? '',
+                }
+              : null,
+          ranking:
+            row.rank === null || row.rank === undefined
+              ? null
+              : {
+                  rank: toNumber(row.rank),
+                  totalScore: toNumber(row.entry_total),
+                  inShortlist: Boolean(row.in_shortlist),
+                  meanConfidence: toNumber(row.entry_mean),
+                },
+          rankingGeneratedAt: toDate(row.ranking_generated_at),
+          finalPosition:
+            row.final_position === null || row.final_position === undefined ? null : toNumber(row.final_position),
+          finalSelectionReason: (row.selection_reason as string | null) ?? null,
           feedbackStatus: ((row.feedback_status as string | null) ?? 'pending') as FeedbackStatus,
           feedbackError: (row.feedback_error as string | null) ?? null,
           feedbackAttempts: toNumber(row.feedback_attempts, 0),
