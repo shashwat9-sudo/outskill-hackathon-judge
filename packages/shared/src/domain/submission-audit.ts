@@ -1198,6 +1198,126 @@ export function submissionsAuditFilename(cohortCode: string, at: Date = new Date
 }
 
 // --------------------------------------------------------------------------
+// Team results sheet
+// --------------------------------------------------------------------------
+
+/**
+ * The columns of the team-share sheet: the same facts as the audit export,
+ * ordered for someone who is not an engineer — outcome and rank first,
+ * scores, links and feedback next, technical fields last.
+ */
+export const TEAM_RESULTS_HEADERS: readonly string[] = [
+  'Group Number',
+  'Product Name',
+  'Idea / Category',
+  'Ranking Status',
+  'Rank',
+  'Total Score',
+  'In Top 10',
+  'Assessment Outcome',
+  'Why Not Ranked / Review Reason',
+  'Failure Stage',
+  'Failure Category',
+  'Manual Review',
+  'Low Confidence',
+  'Feedback Status',
+  ...RUBRIC_CATEGORIES.map((c) => RESULTS_EXPORT_CATEGORY_LABELS[c.key]),
+  'Product URL',
+  'Loom / Demo URL',
+  'Deck URL',
+  'Feedback Summary',
+  'Strength 1',
+  'Strength 2',
+  'Strength 3',
+  'Improvement 1',
+  'Improvement 2',
+  'Improvement 3',
+  'Bugs / Issues',
+  '7-Day Plan',
+  'Submission ID',
+  'Attempt Count',
+  'Reason Source',
+  'Reason Evidence Quality',
+  'Technical Detail',
+];
+
+/** "Ranked", or "Not Ranked — <why>" in the words the outcome bucket uses. */
+export function describeRankingStatus(row: SubmissionAuditRow): string {
+  if (row.ranking) return 'Ranked';
+  switch (classifyOutcome(row)) {
+    case 'Failed':
+      return 'Not Ranked — Assessment Failed';
+    case 'Needs human review':
+      return 'Not Ranked — Needs Human Review';
+    case 'Disqualified':
+      return 'Not Ranked — Disqualified';
+    default:
+      return 'Not Ranked — Incomplete';
+  }
+}
+
+/** One row of the team sheet, in `TEAM_RESULTS_HEADERS` order. */
+export function teamResultsRow(row: SubmissionAuditRow): unknown[] {
+  const outcome = classifyOutcome(row);
+  const failure = explainOutcome(row);
+  const review = describeManualReview(row);
+  const eligibility = rankEligibility(row);
+  const complete = hasCompleteScores(row);
+  const totalScore = row.ranking ? row.ranking.totalScore : complete && row.summary ? row.summary.totalScore : null;
+  const why = row.ranking
+    ? review.status === 'open'
+      ? review.reasons
+      : ''
+    : failure.explanation || eligibility.exclusionReason;
+  const [i1, i2, i3] = improvementCells(row.feedback);
+
+  return [
+    row.groupNumber,
+    row.productName ?? '',
+    row.ideaTitle ?? '',
+    describeRankingStatus(row),
+    row.ranking?.rank ?? '',
+    fixed(totalScore),
+    row.ranking ? yesNo(row.ranking.inShortlist) : '',
+    outcome,
+    why,
+    failure.failureStage,
+    failure.failureCategory,
+    yesNo(review.flagged),
+    yesNo(review.lowConfidence),
+    describeFeedbackStatus(row),
+    ...RUBRIC_CATEGORIES.map((c) => {
+      const score = row.categoryScores[c.key];
+      return score ? score.rawScore.toFixed(2) : '';
+    }),
+    sanitiseForExport(row.productUrl),
+    sanitiseForExport(row.loomUrl),
+    sanitiseForExport(row.deckUrl),
+    row.feedback?.productSummary ?? '',
+    row.feedback?.strengths[0] ?? '',
+    row.feedback?.strengths[1] ?? '',
+    row.feedback?.strengths[2] ?? '',
+    i1,
+    i2,
+    i3,
+    row.feedback
+      ? row.feedback.bugs.map((bug) => (bug.evidence ? `${bug.description} (evidence: ${bug.evidence})` : bug.description)).join('\n')
+      : '',
+    row.feedback ? row.feedback.nextSevenDayPlan.map((step, index) => `${index + 1}. ${step}`).join('\n') : '',
+    row.submissionId,
+    row.job ? row.job.attemptCount : '',
+    failure.failureCategory ? failure.reasonSource : '',
+    failure.failureCategory ? failure.evidenceQuality : '',
+    failure.technicalDetail,
+  ];
+}
+
+/** The team sheet: ranked rows first by rank, then the rest by group number. Same safety as the audit file. */
+export function buildTeamResultsCsv(rows: readonly SubmissionAuditRow[]): string {
+  return `﻿${toCsv([...TEAM_RESULTS_HEADERS], orderAuditRows(rows).map(teamResultsRow))}`;
+}
+
+// --------------------------------------------------------------------------
 // Summary
 // --------------------------------------------------------------------------
 

@@ -14,6 +14,8 @@ import {
   submissionAuditRow,
   submissionsAuditFilename,
   summariseSubmissionAudit,
+  buildTeamResultsCsv,
+  TEAM_RESULTS_HEADERS,
   type AuditManualReviewFlag,
   type SubmissionAuditRow,
 } from './submission-audit';
@@ -588,5 +590,43 @@ describe('summariseSubmissionAudit', () => {
     const bucketed = summary.ranked + summary.completedUnranked + summary.needsHumanReview + summary.failed + summary.disqualified + summary.incomplete + summary.notAssessed;
     expect(bucketed).toBe(summary.total);
     expect(submissionAuditRow(rows[0]!)).toHaveLength(SUBMISSIONS_AUDIT_HEADERS.length);
+  });
+});
+
+describe('the team results sheet', () => {
+  it('leads with outcome and rank, ranks first, and never fakes a rank or score', () => {
+    const ranked = row({ submissionId: 'r1', groupNumber: 40 });
+    const flagged = row({ submissionId: 'r2', groupNumber: 3, ranking: { ...row().ranking!, rank: 2, inShortlist: false }, manualReviewFlags: [flag('low_confidence_scores')] });
+    const failed = failedBeforeBrowser('permission denied for table submission_credentials');
+    failed.submissionId = 'f1';
+    failed.groupNumber = 7;
+    const review = row({ submissionId: 'm1', groupNumber: 5, job: { ...row().job!, stage: 'manual_review', lastError: 'The product could not be reached.' }, manualReviewFlags: [flag('product_unreachable')], categoryScores: {}, summary: null, ranking: null, feedback: null, feedbackStatus: 'pending' });
+    const queued = row({ submissionId: 'q1', groupNumber: 9, job: { ...row().job!, stage: 'queued' }, categoryScores: {}, summary: null, ranking: null, feedback: null, feedbackStatus: 'pending' });
+
+    const [headersRow, ...records] = parseCsv(buildTeamResultsCsv([queued, failed, flagged, review, ranked]));
+    const headers = headersRow!;
+    expect(headers).toEqual([...TEAM_RESULTS_HEADERS]);
+    expect(headers.slice(0, 8)).toEqual(['Group Number', 'Product Name', 'Idea / Category', 'Ranking Status', 'Rank', 'Total Score', 'In Top 10', 'Assessment Outcome']);
+    const c = (name: string) => TEAM_RESULTS_HEADERS.indexOf(name);
+
+    expect(records.map((r) => r[c('Group Number')])).toEqual(['40', '3', '5', '7', '9']);
+    expect(records.map((r) => r[c('Ranking Status')])).toEqual([
+      'Ranked',
+      'Ranked',
+      'Not Ranked — Needs Human Review',
+      'Not Ranked — Assessment Failed',
+      'Not Ranked — Incomplete',
+    ]);
+    expect(records.map((r) => r[c('Rank')])).toEqual(['1', '2', '', '', '']);
+    expect(records.map((r) => r[c('Total Score')])).toEqual(['90.00', '90.00', '', '', '']);
+    expect(records.map((r) => r[c('In Top 10')])).toEqual(['yes', 'no', '', '', '']);
+    expect(records[1]![c('Why Not Ranked / Review Reason')]).toMatch(/^low confidence scores/);
+    expect(records[2]![c('Why Not Ranked / Review Reason')]).toMatch(/could not be reached|routed to a human/);
+    expect(records[3]![c('Why Not Ranked / Review Reason')]).toMatch(/refused access to the credentials table/);
+    expect(records[3]![c('Problem Clarity')]).toBe('');
+    expect(records[0]![c('Problem Clarity')]).toBe((RUBRIC_CATEGORIES[0]!.maxPoints * 0.9).toFixed(2));
+    expect(records[4]![c('Failure Category')]).toBe('Incomplete assessment');
+    expect(records[3]![c('Technical Detail')]).toMatch(/permission denied/);
+    expect(headers[headers.length - 1]).toBe('Technical Detail');
   });
 });

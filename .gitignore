@@ -70,3 +70,4 @@ supabase/.branches/
 
 # Local tool permissions. Machine-specific, and nobody else's business.
 .claude/settings.local.json
+exports/
