@@ -33,6 +33,7 @@ const SCHEMA_MIGRATIONS = [
   '0012_worker_status',
   '0013_feedback_status',
   '0014_final_selection_target',
+  '0015_worker_credential_reveal_stamp',
 ] as const;
 
 /**

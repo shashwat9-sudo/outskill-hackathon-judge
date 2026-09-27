@@ -205,7 +205,18 @@ export function assertNoCredentialShapedContent(payload: unknown): void {
     // password — and was correctly scrubbed — would be refused. A guard that
     // rejects the output of the thing it guards is worse than no guard,
     // because the failure reads as a leak.
-    const text = value.replace(/\[[A-Z ]*REMOVED\]/g, '');
+    //
+    // The password redaction keeps its label — "password: [REMOVED]" — so
+    // removing only the marker leaves "password: " in front of whatever else
+    // was on that line. A slide reading "Password: hunter2 (case-sensitive)"
+    // or "Username: u Password: p" therefore came back as "password:
+    // (case-sensitive)" / "password:  Username:" and was refused although
+    // the value was gone. AIAP C14 group 21 failed at artifact analysis for
+    // exactly this. A scrubbed label-and-marker pair is dropped whole first;
+    // a label still followed by a real value is, as before, refused.
+    const text = value
+      .replace(/\b(?:password|passwd|pwd|passcode|pin)[ \t]*[:=][ \t]*\[[A-Z ]*REMOVED\]/gi, '')
+      .replace(/\[[A-Z ]*REMOVED\]/g, '');
 
     for (const shape of CREDENTIAL_SHAPES) {
       if (shape.regex.test(text)) {

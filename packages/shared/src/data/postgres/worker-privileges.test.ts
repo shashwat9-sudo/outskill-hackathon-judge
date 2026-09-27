@@ -1,5 +1,9 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { randomBytes } from 'node:crypto';
 import { createTestDatabase, type PgliteHandle } from './testing/pglite';
+import { seedCohortWithSubmissions } from './testing/assessment-fixtures';
+import { buildSubmissionStore } from './repositories/submissions';
+import { encryptSecret, parseEncryptionKey, serialiseEnvelope } from '../../security/crypto';
 
 /**
  * What the worker's database login can actually do.
@@ -253,5 +257,119 @@ describe('a table nobody has granted yet', () => {
     } finally {
       await db.query(`drop table if exists later_addition`);
     }
+  });
+});
+
+/**
+ * Migration 0015: the reveal the worker is allowed to perform also records
+ * that it happened.
+ *
+ * `revealCredentials` selects the ciphertext and then stamps
+ * `last_revealed_at`. Before 0015 the worker held SELECT only, so every
+ * production reveal failed at the stamp with "permission denied" and every
+ * credential-protected product was marked failed at browser testing (AIAP C14,
+ * eight products). The grant is on that one column and the policy on live
+ * rows; everything else stays exactly as narrow as it was.
+ */
+describe('the credential reveal stamp (0015)', () => {
+  const key = randomBytes(32).toString('base64');
+  let submissionId: string;
+
+  async function asAdmin<T>(fn: () => Promise<T>): Promise<T> {
+    await db.query('set role ohj_admin');
+    try {
+      return await fn();
+    } finally {
+      await db.query('reset role');
+    }
+  }
+
+  async function stampOf(): Promise<unknown> {
+    const { rows } = await db.query<{ last_revealed_at: unknown }>(
+      'select last_revealed_at from submission_credentials where submission_id = $1',
+      [submissionId],
+    );
+    return rows[0]!.last_revealed_at;
+  }
+
+  beforeAll(async () => {
+    await db.query('reset role');
+    await db.query(
+      `insert into rubric_versions (version, name, is_active) values ('rubric-v2', 'Test rubric', true)
+       on conflict do nothing`,
+    );
+    const seeded = await seedCohortWithSubmissions(db, 1, { code: 'PRIV' });
+    submissionId = seeded.submissions[0]!.id;
+    const k = parseEncryptionKey(key);
+    const enc = (value: string) => Buffer.from(serialiseEnvelope(encryptSecret(value, k)));
+    await db.query(
+      `insert into submission_credentials
+         (submission_id, username_ciphertext, password_ciphertext, login_instructions_ciphertext)
+       values ($1, $2, $3, $4)`,
+      [submissionId, enc('judge@demo.invalid'), enc('Hunter2!2026'), enc('Use the demo account.')],
+    );
+  });
+
+  it('lets the worker reveal through the real path, and records that it did', async () => {
+    expect(await stampOf()).toBeNull();
+    const store = buildSubmissionStore({ db, credentialKey: key });
+    const revealed = await asWorker(() => store.revealCredentials(submissionId));
+    expect(revealed).toEqual({
+      username: 'judge@demo.invalid',
+      password: 'Hunter2!2026',
+      loginInstructions: 'Use the demo account.',
+    });
+    expect(await stampOf()).not.toBeNull();
+  });
+
+  it('lets the worker write the stamp and nothing else on the row', async () => {
+    await expect(
+      asWorker(() => db.query('update submission_credentials set last_revealed_at = now() where submission_id = $1', [submissionId])),
+    ).resolves.toBeDefined();
+
+    for (const column of ['username_ciphertext', 'password_ciphertext', 'login_instructions_ciphertext']) {
+      await expect(
+        asWorker(() => db.query(`update submission_credentials set ${column} = 'x' where submission_id = $1`, [submissionId])),
+        column,
+      ).rejects.toThrow(denied);
+    }
+    for (const column of ['deleted_at', 'updated_at']) {
+      await expect(
+        asWorker(() => db.query(`update submission_credentials set ${column} = now() where submission_id = $1`, [submissionId])),
+        column,
+      ).rejects.toThrow(denied);
+    }
+    await expect(
+      asWorker(() => db.query('delete from submission_credentials where submission_id = $1', [submissionId])),
+    ).rejects.toThrow(denied);
+    await expect(
+      asWorker(() => db.query('insert into submission_credentials (submission_id) values ($1)', [submissionId])),
+    ).rejects.toThrow(denied);
+
+    // The ciphertext the team gave us is exactly what it was.
+    const store = buildSubmissionStore({ db, credentialKey: key });
+    expect((await store.revealCredentials(submissionId))?.password).toBe('Hunter2!2026');
+  });
+
+  it('cannot stamp a credential record that has been deleted', async () => {
+    await db.query(
+      'update submission_credentials set deleted_at = now(), last_revealed_at = null where submission_id = $1',
+      [submissionId],
+    );
+    // Row-level security hides the row from the worker's update: no error, no change.
+    await asWorker(() => db.query('update submission_credentials set last_revealed_at = now() where submission_id = $1', [submissionId]));
+    expect(await stampOf()).toBeNull();
+    await db.query('update submission_credentials set deleted_at = null where submission_id = $1', [submissionId]);
+  });
+
+  it('remains narrower than the admin role, and the admin reveal path still works', async () => {
+    // The admin may still maintain the row; the worker (above) may not.
+    await expect(
+      asAdmin(() => db.query('update submission_credentials set updated_at = now() where submission_id = $1', [submissionId])),
+    ).resolves.toBeDefined();
+    // The reveal the admin screen performs runs through the same store method
+    // under the web tier's own connection, not the worker role.
+    const store = buildSubmissionStore({ db, credentialKey: key });
+    expect((await store.revealCredentials(submissionId))?.username).toBe('judge@demo.invalid');
   });
 });
