@@ -113,3 +113,25 @@ describe('sheet cohort lifecycle', () => {
     expect(cohortTransitionsFor('portal').draft).not.toContain('closed');
   });
 });
+
+describe('spreadsheet id and partner mode', () => {
+  it('accepts a bare id or a full URL, and blank for the default', async () => {
+    const { normaliseSpreadsheetId, validateSpreadsheetId, isExternallyFed } = await import('./cohort-intake');
+    expect(normaliseSpreadsheetId('  1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789  ')).toBe('1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789');
+    expect(normaliseSpreadsheetId('https://docs.google.com/spreadsheets/d/1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789/edit#gid=0')).toBe(
+      '1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789',
+    );
+    expect(validateSpreadsheetId('')).toBeNull();
+    expect(validateSpreadsheetId('1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789')).toBeNull();
+    expect(validateSpreadsheetId('short')).toMatch(/long id/);
+    expect(validateSpreadsheetId('has spaces in it and is long enough')).toMatch(/long id/);
+    expect(isExternallyFed('partner')).toBe(true);
+    expect(isExternallyFed('sheet')).toBe(true);
+    expect(isExternallyFed('portal')).toBe(false);
+  });
+
+  it('treats a partner-API cohort like a sheet cohort for the lifecycle', () => {
+    expect(canTransitionCohort('draft', 'closed', { intakeMode: 'partner' }).allowed).toBe(true);
+    expect(cohortTransitionsFor('partner').draft).toContain('closed');
+  });
+});

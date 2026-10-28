@@ -32,6 +32,7 @@ const config: IntakeConfig = {
   tabName: 'Form Responses 1',
   intakeTimezone: 'Asia/Kolkata',
   spreadsheetIdMasked: 'sheet-…3456',
+  spreadsheetSource: 'default',
   approvedIdeas: 8,
   missing: [],
 };

@@ -22,8 +22,9 @@ export function IntakeSettings({
   cohortId: string;
   csrfToken: string;
   initial: {
-    intakeMode: 'portal' | 'sheet';
+    intakeMode: 'portal' | 'sheet' | 'partner';
     externalCohortId: string | null;
+    intakeSpreadsheetId: string | null;
     intakeTabName: string | null;
     intakeTimezone: string | null;
     timezone: string;
@@ -31,8 +32,9 @@ export function IntakeSettings({
   /** True once the cohort holds imported submissions: the external id may not change. */
   locked: boolean;
 }) {
-  const [mode, setMode] = React.useState<'portal' | 'sheet'>(initial.intakeMode);
+  const [mode, setMode] = React.useState<'portal' | 'sheet' | 'partner'>(initial.intakeMode);
   const [externalId, setExternalId] = React.useState(initial.externalCohortId ?? '');
+  const [spreadsheet, setSpreadsheet] = React.useState(initial.intakeSpreadsheetId ?? '');
   const [tab, setTab] = React.useState(initial.intakeTabName ?? '');
   const [zone, setZone] = React.useState(initial.intakeTimezone ?? initial.timezone);
   const [pending, setPending] = React.useState<'save' | 'test' | null>(null);
@@ -48,6 +50,7 @@ export function IntakeSettings({
       formData.set('cohortId', cohortId);
       formData.set('intakeMode', mode);
       formData.set('externalCohortId', externalId);
+      formData.set('intakeSpreadsheetId', spreadsheet);
       formData.set('intakeTabName', tab);
       formData.set('intakeTimezone', zone);
       const outcome = await updateCohortIntakeAction(formData);
@@ -77,15 +80,16 @@ export function IntakeSettings({
             {...aria}
             className="w-full rounded-[10px] border border-line bg-surface px-3 py-2 text-sm text-ink"
             value={mode}
-            onChange={(e) => setMode(e.target.value as 'portal' | 'sheet')}
+            onChange={(e) => setMode(e.target.value as 'portal' | 'sheet' | 'partner')}
           >
             <option value="portal">Judge participant portal</option>
             <option value="sheet">External Google Sheet intake</option>
+            <option value="partner">Partner API</option>
           </select>
         )}
       </Field>
-      {mode === 'sheet' && (
-        <div className="grid gap-4 sm:grid-cols-3">
+      {mode !== 'portal' && (
+        <div className="grid gap-4 sm:grid-cols-2">
           <Field
             id={`intake-external-${cohortId}`}
             label="External cohort ID"
@@ -96,12 +100,23 @@ export function IntakeSettings({
               <Input {...aria} value={externalId} onChange={(e) => setExternalId(e.target.value)} disabled={locked} />
             )}
           </Field>
-          <Field id={`intake-tab-${cohortId}`} label="Google Sheet tab" required hint="e.g. Submissions - AIAP C15 IST">
-            {(aria) => <Input {...aria} value={tab} onChange={(e) => setTab(e.target.value)} />}
-          </Field>
-          <Field id={`intake-zone-${cohortId}`} label="Sheet timestamps are in" hint="IANA zone, e.g. America/New_York">
-            {(aria) => <Input {...aria} value={zone} onChange={(e) => setZone(e.target.value)} />}
-          </Field>
+          {mode === 'sheet' && (
+            <>
+              <Field
+                id={`intake-spreadsheet-${cohortId}`}
+                label="Spreadsheet ID"
+                hint="From the sheet's URL (…/spreadsheets/d/<ID>/…). Leave blank to use the default spreadsheet."
+              >
+                {(aria) => <Input {...aria} value={spreadsheet} onChange={(e) => setSpreadsheet(e.target.value)} />}
+              </Field>
+              <Field id={`intake-tab-${cohortId}`} label="Google Sheet tab" required hint="e.g. Submissions - AIAP C15 IST">
+                {(aria) => <Input {...aria} value={tab} onChange={(e) => setTab(e.target.value)} />}
+              </Field>
+              <Field id={`intake-zone-${cohortId}`} label="Sheet timestamps are in" hint="IANA zone, e.g. America/New_York">
+                {(aria) => <Input {...aria} value={zone} onChange={(e) => setZone(e.target.value)} />}
+              </Field>
+            </>
+          )}
         </div>
       )}
       <div className="flex flex-wrap gap-3">

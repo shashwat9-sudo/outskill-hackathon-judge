@@ -1003,6 +1003,7 @@ export class MemoryDataStore implements DataStore {
           isSynthetic: false,
           externalCohortId: null,
           intakeMode: input.intakeMode ?? 'portal',
+          intakeSpreadsheetId: null,
           intakeTabName: null,
           intakeTimezone: null,
           createdAt: new Date(),
@@ -1018,6 +1019,7 @@ export class MemoryDataStore implements DataStore {
         // Set only through updateCohortIntake, as in Postgres.
         delete writable.externalCohortId;
         delete writable.intakeMode;
+        delete writable.intakeSpreadsheetId;
         delete writable.intakeTabName;
         delete writable.intakeTimezone;
         Object.assign(cohort, writable, { id: cohort.id, updatedAt: new Date() });
@@ -1031,8 +1033,11 @@ export class MemoryDataStore implements DataStore {
       updateCohortIntake: async (id, intake) => {
         const cohort = this.db.cohorts.find((c) => c.id === id);
         if (!cohort) throw new Error(`Cohort ${id} not found.`);
-        const externalCohortId = intake.intakeMode === 'sheet' ? intake.externalCohortId : null;
-        const tabName = intake.intakeMode === 'sheet' ? intake.intakeTabName : null;
+        const external = intake.intakeMode !== 'portal';
+        const sheet = intake.intakeMode === 'sheet';
+        const externalCohortId = external ? intake.externalCohortId : null;
+        const spreadsheetId = sheet ? intake.intakeSpreadsheetId : null;
+        const tabName = sheet ? intake.intakeTabName : null;
         const imported = this.db.submissions.filter(
           (s) => s.cohortId === id && Boolean((s as { externalSubmissionId?: string | null }).externalSubmissionId),
         ).length;
@@ -1046,13 +1051,19 @@ export class MemoryDataStore implements DataStore {
           : undefined;
         if (idClash) throw new Error(`External cohort ID "${externalCohortId}" is already used by cohort "${idClash.name}".`);
         const tabClash = tabName
-          ? this.db.cohorts.find((c) => c.id !== id && c.intakeTabName?.toLowerCase() === tabName.toLowerCase())
+          ? this.db.cohorts.find(
+              (c) =>
+                c.id !== id &&
+                c.intakeTabName?.toLowerCase() === tabName.toLowerCase() &&
+                (c.intakeSpreadsheetId ?? '') === (spreadsheetId ?? ''),
+            )
           : undefined;
         if (tabClash) throw new Error(`Sheet tab "${tabName}" is already read by cohort "${tabClash.name}".`);
         cohort.intakeMode = intake.intakeMode;
         cohort.externalCohortId = externalCohortId;
+        cohort.intakeSpreadsheetId = spreadsheetId;
         cohort.intakeTabName = tabName;
-        cohort.intakeTimezone = intake.intakeMode === 'sheet' ? intake.intakeTimezone : null;
+        cohort.intakeTimezone = sheet ? intake.intakeTimezone : null;
         cohort.updatedAt = new Date();
         return clone(cohort);
       },

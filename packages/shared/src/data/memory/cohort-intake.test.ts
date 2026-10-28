@@ -43,12 +43,14 @@ describe('updateCohortIntake', () => {
     await store.cohorts.updateCohortIntake(ist.id, {
       intakeMode: 'sheet',
       externalCohortId: 'AIAP-C15-IST',
+      intakeSpreadsheetId: 'HackathonGroupAllocator0000000001',
       intakeTabName: 'Submissions - AIAP C15 IST',
       intakeTimezone: 'Asia/Kolkata',
     });
     await store.cohorts.updateCohortIntake(est.id, {
       intakeMode: 'sheet',
       externalCohortId: 'AIAP-C15-EST',
+      intakeSpreadsheetId: 'HackathonGroupAllocator0000000001',
       intakeTabName: 'Submissions - AIAP C15 EST',
       intakeTimezone: 'America/New_York',
     });
@@ -60,6 +62,7 @@ describe('updateCohortIntake', () => {
       store.cohorts.updateCohortIntake(est.id, {
         intakeMode: 'sheet',
         externalCohortId: 'AIAP-C15-IST',
+        intakeSpreadsheetId: 'HackathonGroupAllocator0000000001',
         intakeTabName: 'Submissions - AIAP C15 EST',
         intakeTimezone: null,
       }),
@@ -68,6 +71,7 @@ describe('updateCohortIntake', () => {
       store.cohorts.updateCohortIntake(est.id, {
         intakeMode: 'sheet',
         externalCohortId: 'AIAP-C15-EST',
+        intakeSpreadsheetId: 'HackathonGroupAllocator0000000001',
         intakeTabName: 'submissions - aiap c15 ist',
         intakeTimezone: null,
       }),
@@ -83,6 +87,7 @@ describe('updateCohortIntake', () => {
     const portal = await store.cohorts.updateCohortIntake(ist.id, {
       intakeMode: 'portal',
       externalCohortId: 'ignored',
+      intakeSpreadsheetId: 'ignored',
       intakeTabName: 'ignored',
       intakeTimezone: 'ignored',
     });

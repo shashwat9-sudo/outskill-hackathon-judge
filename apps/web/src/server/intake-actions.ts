@@ -56,7 +56,9 @@ export interface IntakeConfig {
   tabName: string | null;
   /** The zone the sheet's timestamps are read in. */
   intakeTimezone: string | null;
+  /** The spreadsheet this cohort reads, masked; the deployment default unless the cohort names its own. */
   spreadsheetIdMasked: string | null;
+  spreadsheetSource: 'cohort' | 'default' | null;
   serviceAccountEmail: string | null;
   expectedServiceAccount: string;
   /** Active, approved ideas on the cohort — an import needs at least one. */
@@ -123,6 +125,7 @@ export async function getIntakeConfig(cohortId: string | null): Promise<IntakeCo
     tabName: null,
     intakeTimezone: null,
     spreadsheetIdMasked: mask(env.GOOGLE_SHEETS_SPREADSHEET_ID),
+    spreadsheetSource: env.GOOGLE_SHEETS_SPREADSHEET_ID ? 'default' : null,
     serviceAccountEmail: env.GOOGLE_SERVICE_ACCOUNT_EMAIL ?? null,
     expectedServiceAccount: EXPECTED_SERVICE_ACCOUNT,
     approvedIdeas: 0,
@@ -150,6 +153,8 @@ export async function getIntakeConfig(cohortId: string | null): Promise<IntakeCo
     externalCohortId: cohort.externalCohortId,
     tabName: cohort.intakeTabName,
     intakeTimezone: intakeTimezoneOf(cohort),
+    spreadsheetIdMasked: cohort.intakeSpreadsheetId ? mask(cohort.intakeSpreadsheetId) : mask(env.GOOGLE_SHEETS_SPREADSHEET_ID),
+    spreadsheetSource: cohort.intakeSpreadsheetId ? 'cohort' : env.GOOGLE_SHEETS_SPREADSHEET_ID ? 'default' : null,
     approvedIdeas,
     missing,
   };
@@ -172,7 +177,11 @@ export async function testConnectionAction(cohortId: string): Promise<Connection
   const resolved = await resolveIntakeCohort(cohortId);
   if (!resolved.ok) return { error: resolved.error };
   const env = getEnvConfig();
-  const config = readGoogleConfig(env as unknown as Record<string, string | undefined>, resolved.cohort.intakeTabName);
+  const config = readGoogleConfig(
+    env as unknown as Record<string, string | undefined>,
+    resolved.cohort.intakeTabName,
+    resolved.cohort.intakeSpreadsheetId,
+  );
   if (!config) {
     return { error: 'Google Sheets is not configured on the server yet. See the configuration panel above.' };
   }
@@ -237,7 +246,11 @@ async function runIntake(input: {
   if (input.csv) {
     source = csvSource(input.csv, `manual-upload (${cohort.code}).csv`);
   } else {
-    const config = readGoogleConfig(env as unknown as Record<string, string | undefined>, cohort.intakeTabName);
+    const config = readGoogleConfig(
+      env as unknown as Record<string, string | undefined>,
+      cohort.intakeTabName,
+      cohort.intakeSpreadsheetId,
+    );
     if (!config) return { ranAt, error: 'Google Sheets is not configured on the server yet.' };
     source = googleSheetsSource(config);
   }

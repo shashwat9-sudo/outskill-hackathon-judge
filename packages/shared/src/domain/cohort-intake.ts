@@ -11,7 +11,7 @@
 
 import type { Cohort } from '../data/types';
 
-export const COHORT_INTAKE_MODES = ['portal', 'sheet'] as const;
+export const COHORT_INTAKE_MODES = ['portal', 'sheet', 'partner'] as const;
 export type CohortIntakeMode = (typeof COHORT_INTAKE_MODES)[number];
 
 export function isCohortIntakeMode(value: unknown): value is CohortIntakeMode {
@@ -21,10 +21,35 @@ export function isCohortIntakeMode(value: unknown): value is CohortIntakeMode {
 export const INTAKE_MODE_LABELS: Record<CohortIntakeMode, string> = {
   portal: 'Judge participant portal',
   sheet: 'External Google Sheet intake',
+  partner: 'Partner API',
 };
 
 export function isSheetCohort(cohort: Pick<Cohort, 'intakeMode'>): boolean {
   return cohort.intakeMode === 'sheet';
+}
+
+/** Cohorts whose submissions arrive from outside never open the participant portal. */
+export function isExternallyFed(mode: CohortIntakeMode): boolean {
+  return mode === 'sheet' || mode === 'partner';
+}
+
+/** A Google spreadsheet id as it appears in the file's URL. */
+export const SPREADSHEET_ID_PATTERN = /^[A-Za-z0-9_-]{20,}$/;
+
+/** Accepts the bare id or a full docs.google.com URL; returns the id, or '' for blank. */
+export function normaliseSpreadsheetId(value: string): string {
+  const raw = value.trim();
+  const fromUrl = /\/spreadsheets\/d\/([A-Za-z0-9_-]{20,})/.exec(raw);
+  return fromUrl ? fromUrl[1]! : raw;
+}
+
+export function validateSpreadsheetId(value: string): string | null {
+  const id = normaliseSpreadsheetId(value);
+  if (!id) return null; // blank means the deployment default
+  if (!SPREADSHEET_ID_PATTERN.test(id)) {
+    return 'The spreadsheet ID should be the long id from the sheet\'s URL (letters, digits, - and _). Leave it blank to use the default spreadsheet.';
+  }
+  return null;
 }
 
 /** `AIAP-C15-IST`: letters, digits and dashes, 3–40 characters. */

@@ -333,3 +333,5 @@ Two cohorts now run from two tabs of one spreadsheet (AIAP C15 IST and EST). Unt
 **Admin pages.** Every cohort-scoped page takes `?cohort=<id>`, validates it on the server, shows a switcher, and passes that id into every action; an unknown id is "not found", never a fallback. Without one, the page defaults to the single judging or open cohort and says so.
 
 **Cost.** One more thing to set per cohort (its tab), done once in the admin UI; and a queue that will not run a cohort an operator forgot to start — which is the behaviour asked for.
+
+**Amendment (same day).** A cohort may also name its own spreadsheet (`intake_spreadsheet_id`); null means the deployment default, which is how C13 and C14 keep reading the file they came from. The tab uniqueness index is per spreadsheet. Partner-API cohorts are a third mode, `partner`, never treated as sheet-fed: the backfill tells the two apart by what a cohort holds (sheet rows carry `group-<n>` submission ids; partner rows carry the partner's ids) rather than by the presence of an external id.

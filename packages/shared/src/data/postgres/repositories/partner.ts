@@ -231,7 +231,7 @@ export function buildPartnerStore(
            values ($1,$2,$3,
                    coalesce($4, now()),
                    coalesce($5, now() + interval '2 days'),
-                   coalesce($6::integer, $9::integer), $7, 'closed', $8::jsonb, $10::integer, 'sheet')
+                   coalesce($6::integer, $9::integer), $7, 'closed', $8::jsonb, $10::integer, 'partner')
            returning id`,
           [
             input.name,

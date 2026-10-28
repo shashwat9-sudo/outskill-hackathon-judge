@@ -193,8 +193,8 @@ export function LifecycleControls({
   intakeMode = 'portal',
 }: {
   cohortId: string;
-  /** A sheet-fed cohort never opens the portal: it goes from draft straight to closed. */
-  intakeMode?: 'portal' | 'sheet';
+  /** An externally fed cohort (sheet or partner API) never opens the portal: draft straight to closed. */
+  intakeMode?: 'portal' | 'sheet' | 'partner';
   /** Named in the archive confirmation, so nobody retires the wrong cohort. */
   cohortName: string;
   currentStatus: string;
@@ -209,9 +209,10 @@ export function LifecycleControls({
 
   // Hidden rather than shown-and-disabled: an operator should not be left
   // wondering whether they lack a permission. The page explains why elsewhere.
+  const external = intakeMode === 'sheet' || intakeMode === 'partner';
   const transitions = [
-    ...(intakeMode === 'sheet' && currentStatus === 'draft' ? [SHEET_DRAFT_TO_CLOSED] : []),
-    ...(TRANSITIONS[currentStatus] ?? []).filter((t) => !(intakeMode === 'sheet' && currentStatus === 'draft' && t.status === 'open')),
+    ...(external && currentStatus === 'draft' ? [SHEET_DRAFT_TO_CLOSED] : []),
+    ...(TRANSITIONS[currentStatus] ?? []).filter((t) => !(external && currentStatus === 'draft' && t.status === 'open')),
   ].filter((t) => judgingAvailable || t.status !== 'judging');
 
   const run = async (transition: Transition) => {

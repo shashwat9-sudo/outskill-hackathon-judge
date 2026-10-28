@@ -21,9 +21,9 @@ import type { CategoryScore, Cohort } from '../data/types';
  */
 
 const KEY = Buffer.alloc(32, 7).toString('base64');
-const SPREADSHEET = 'sheet-hackathon-group-allocator-0001';
-const IST = { external: 'AIAP-C15-IST', tab: 'Submissions - AIAP C15 IST', name: 'AIAP C15 IST', code: 'C15IST', zone: 'Asia/Kolkata' };
-const EST = { external: 'AIAP-C15-EST', tab: 'Submissions - AIAP C15 EST', name: 'AIAP C15 EST', code: 'C15EST', zone: 'America/New_York' };
+const C15_SPREADSHEET = '1HackathonGroupAllocator0000000000000000001';
+const IST = { external: 'AIAP-C15-IST', tab: 'Submissions - AIAP C15 IST', name: 'AIAP C15 IST', code: 'C15IST', zone: 'Asia/Kolkata', spreadsheet: C15_SPREADSHEET };
+const EST = { external: 'AIAP-C15-EST', tab: 'Submissions - AIAP C15 EST', name: 'AIAP C15 EST', code: 'C15EST', zone: 'America/New_York', spreadsheet: C15_SPREADSHEET };
 
 let db: PgliteHandle;
 let store: DataStore;
@@ -55,7 +55,7 @@ const rows = (overrides: Record<string, string>[]) => [
 ];
 const tabSource = (tab: string, data: string[][]): SheetSource => ({
   read: async () => data,
-  describe: () => ({ kind: 'google_sheets', spreadsheetId: SPREADSHEET, tabName: tab }),
+  describe: () => ({ kind: 'google_sheets', spreadsheetId: C15_SPREADSHEET, tabName: tab }),
 });
 
 const istRows = rows([
@@ -98,6 +98,7 @@ async function makeCohort(spec: typeof IST): Promise<Cohort> {
   const bound = await store.cohorts.updateCohortIntake(created.id, {
     intakeMode: 'sheet',
     externalCohortId: spec.external,
+    intakeSpreadsheetId: spec.spreadsheet,
     intakeTabName: spec.tab,
     intakeTimezone: spec.zone,
   });
@@ -442,7 +443,9 @@ describe('results isolation', () => {
       [legacy.cohortId],
     );
     const c14 = await store.cohorts.getCohort(legacy.cohortId!);
-    expect(c14?.intakeMode).toBe('sheet');
+    // Created through the partner API path, it is labelled partner-fed; the
+    // import below still works because the legacy path keys off the external id.
+    expect(c14?.intakeMode).toBe('partner');
     const dry = await syncSheet({ store, source: tabSource('Submissions - AIAP C14', istRows), externalCohortId: 'AIAP-C14', cohortName: 'AIAP C14', dryRun: true });
     const done = await syncSheet({ store, source: tabSource('Submissions - AIAP C14', istRows), externalCohortId: 'AIAP-C14', cohortName: 'AIAP C14', dryRun: false, expectedFingerprint: dry.fingerprint });
     expect(done.fatalError).toBeUndefined();
@@ -451,5 +454,57 @@ describe('results isolation', () => {
     // The IST and EST cohorts are untouched by it.
     expect(await submissionsOf(ist.id)).toEqual([]);
     expect(await submissionsOf(est.id)).toEqual([]);
+  });
+});
+
+describe('per-cohort spreadsheet (0016)', () => {
+  it('lets the same tab name exist in two spreadsheets, and keeps the default for historical cohorts', async () => {
+    // A C16 cohort in another spreadsheet may reuse a tab name without clashing.
+    const c16 = await store.cohorts.createCohort({
+      name: 'AIAP C16 IST',
+      code: 'C16IST',
+      description: '',
+      timezone: 'Asia/Kolkata',
+      day12StartAt: new Date('2026-11-28T00:00:00Z'),
+      day13DeadlineAt: new Date('2026-11-30T04:30:00Z'),
+      shortlistTarget: 10,
+      submissionInstructions: '',
+      rubricVersion: RUBRIC_VERSION,
+      assessmentConfig: ist.assessmentConfig,
+      status: 'draft',
+      closedAt: null,
+      closureType: null,
+      acceptingUntil: null,
+      intakeMode: 'sheet',
+    });
+    const bound = await store.cohorts.updateCohortIntake(c16.id, {
+      intakeMode: 'sheet',
+      externalCohortId: 'AIAP-C16-IST',
+      intakeSpreadsheetId: '1AnotherSpreadsheet00000000000000000002',
+      intakeTabName: IST.tab,
+      intakeTimezone: 'Asia/Kolkata',
+    });
+    expect(bound.intakeSpreadsheetId).toBe('1AnotherSpreadsheet00000000000000000002');
+    // The same tab in the SAME spreadsheet is refused.
+    await expect(
+      store.cohorts.updateCohortIntake(c16.id, {
+        intakeMode: 'sheet',
+        externalCohortId: 'AIAP-C16-IST',
+        intakeSpreadsheetId: C15_SPREADSHEET,
+        intakeTabName: IST.tab,
+        intakeTimezone: 'Asia/Kolkata',
+      }),
+    ).rejects.toThrow(/already read by cohort "AIAP C15 IST"/);
+    // A historical cohort reads the default spreadsheet: no spreadsheet id, tab from the backfill.
+    const legacy = await store.partner!.syncCohort({ externalCohortId: 'AIAP-C14', name: 'AIAP C14' });
+    const c14 = await store.cohorts.getCohort(legacy.cohortId!);
+    expect(c14?.intakeSpreadsheetId).toBeNull();
+    // A partner-API cohort is never sheet-fed, and the fingerprint of a sheet
+    // read names its spreadsheet, so two files with equal rows differ.
+    expect(c14?.intakeMode).toBe('partner');
+    const a = await syncSheet({ store, source: tabSource(IST.tab, istRows), cohortId: ist.id, externalCohortId: IST.external, cohortName: IST.name, dryRun: true });
+    const other: SheetSource = { read: async () => istRows, describe: () => ({ kind: 'google_sheets', spreadsheetId: 'different-spreadsheet-0000000000000', tabName: IST.tab }) };
+    const b = await syncSheet({ store, source: other, cohortId: ist.id, externalCohortId: IST.external, cohortName: IST.name, dryRun: true });
+    expect(a.fingerprint).not.toBe(b.fingerprint);
   });
 });

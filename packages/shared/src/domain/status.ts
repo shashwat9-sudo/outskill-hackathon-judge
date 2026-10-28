@@ -194,14 +194,17 @@ const SHEET_COHORT_TRANSITIONS: Record<CohortStatus, readonly CohortStatus[]> = 
   draft: ['closed', 'open', 'archived'],
 };
 
-export function cohortTransitionsFor(intakeMode: 'portal' | 'sheet' = 'portal'): Record<CohortStatus, readonly CohortStatus[]> {
-  return intakeMode === 'sheet' ? SHEET_COHORT_TRANSITIONS : COHORT_TRANSITIONS;
+export function cohortTransitionsFor(
+  intakeMode: 'portal' | 'sheet' | 'partner' = 'portal',
+): Record<CohortStatus, readonly CohortStatus[]> {
+  // Externally fed cohorts (sheet or partner API) never open the portal.
+  return intakeMode === 'sheet' || intakeMode === 'partner' ? SHEET_COHORT_TRANSITIONS : COHORT_TRANSITIONS;
 }
 
 export function canTransitionCohort(
   from: CohortStatus,
   to: CohortStatus,
-  options: { intakeMode?: 'portal' | 'sheet' } = {},
+  options: { intakeMode?: 'portal' | 'sheet' | 'partner' } = {},
 ): TransitionResult {
   return check(cohortTransitionsFor(options.intakeMode), 'cohort', from, to);
 }

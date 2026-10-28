@@ -1,6 +1,6 @@
 # Running two cohorts side by side — operator runbook (AIAP C15 IST and EST)
 
-Everything below is done from the admin screens. No deployment, environment variable or script is needed to add a cohort or point it at a tab. The spreadsheet ("Hackathon Group Allocator") and the Google service account are shared and already configured on the server.
+Everything below is done from the admin screens. No deployment, environment variable or script is needed to add a cohort or point it at a spreadsheet tab. The Google service account is shared and configured on the server. The C15 tabs live in the newer spreadsheet **Hackathon Group Allocator**, so each C15 cohort names that spreadsheet's ID; historical cohorts (C13, C14) keep reading the default spreadsheet ("Group Allocator - Updated") with no change. The service account must be shared on the new spreadsheet as a viewer.
 
 **The one rule:** the cohort you have selected decides which tab is read, where submissions go, and what is judged, ranked and exported. Time of day and deadlines never decide any of that. Importing never starts judging; only the Start judging button for that cohort does.
 
@@ -10,6 +10,7 @@ Everything below is done from the admin screens. No deployment, environment vari
 2. Basics: Name `AIAP C15 IST`, Code `C15IST`, Timezone `Asia/Kolkata`.
 3. "Where submissions come from": **External Google Sheet intake**. Then:
    - External cohort ID: `AIAP-C15-IST`
+   - Spreadsheet ID: the long id from the Hackathon Group Allocator URL (`https://docs.google.com/spreadsheets/d/<ID>/…`); pasting the whole URL also works
    - Google Sheet tab: `Submissions - AIAP C15 IST`
    - Sheet timestamps are in: the spreadsheet's own timezone (for a sheet maintained in India, `Asia/Kolkata`).
 4. Schedule: Day 12 start and the 10:00 AM Day 13 deadline in the cohort timezone. Shortlist target 10. Review → Create.
@@ -18,11 +19,11 @@ Everything below is done from the admin screens. No deployment, environment vari
 
 ## 2. Assign or change the IST tab later
 
-Cohorts → the C15 IST card → **Intake** panel → edit the tab (or the timezone) → **Save intake settings** → **Test tab**. The external cohort ID is locked once the cohort holds imported submissions; the tab name can still be corrected. A tab or ID already used by another cohort is refused.
+Cohorts → the C15 IST card → **Intake** panel → edit the spreadsheet ID, the tab or the timezone → **Save intake settings** → **Test tab**. The external cohort ID is locked once the cohort holds imported submissions; the tab name can still be corrected. A tab or ID already used by another cohort is refused.
 
 ## 3. Create C15 EST and assign its tab
 
-Repeat section 1 with Name `AIAP C15 EST`, Code `C15EST`, External cohort ID `AIAP-C15-EST`, tab `Submissions - AIAP C15 EST`, the 8:00 PM deadline, and the sheet's timezone. Both cohorts can be in draft or closed at the same time; neither needs the other to close.
+Repeat section 1 with Name `AIAP C15 EST`, Code `C15EST`, External cohort ID `AIAP-C15-EST`, the same Spreadsheet ID, tab `Submissions - AIAP C15 EST`, the 8:00 PM deadline, and the sheet's timezone. Both cohorts can be in draft or closed at the same time; neither needs the other to close.
 
 ## 4. Check each tab (any time, as often as you like)
 

@@ -64,6 +64,7 @@ interface Options {
   /** With --bind-external-id: the sheet tab and timestamp zone to record on the cohort (0016). */
   intakeTab: string | null;
   intakeTimezone: string | null;
+  intakeSpreadsheetId: string | null;
   apply: boolean;
   expectName: string | null;
   finalSelectionTarget: number | null;
@@ -80,7 +81,7 @@ function usage(message?: string): never {
     [
       'Usage:',
       '  npx tsx scripts/configure-cohort-ideas.ts --external-cohort-id <ID> [--apply]',
-      '      [--cohort-id <uuid> [--bind-external-id [--intake-tab <tab>] [--intake-timezone <zone>]]]',
+      '      [--cohort-id <uuid> [--bind-external-id [--intake-tab <tab>] [--intake-timezone <zone>] [--intake-spreadsheet-id <id>]]]',
       '      [--expect-name <text>] [--final-selection-target <n>] [--shortlist-target <n>]',
       '      [--prompt-version current] [--backup-dir <dir>]',
       '',
@@ -99,6 +100,7 @@ function parseArgs(argv: string[]): Options {
     bindExternalId: false,
     intakeTab: null,
     intakeTimezone: null,
+    intakeSpreadsheetId: null,
     apply: false,
     expectName: null,
     finalSelectionTarget: null,
@@ -137,6 +139,10 @@ function parseArgs(argv: string[]): Options {
         break;
       case '--intake-timezone':
         options.intakeTimezone = takeValue(arg, i);
+        i += 1;
+        break;
+      case '--intake-spreadsheet-id':
+        options.intakeSpreadsheetId = takeValue(arg, i);
         i += 1;
         break;
       case '--expect-name':
@@ -309,7 +315,7 @@ async function bindExternalId(
   db: SqlDatabase,
   cohort: CohortRow,
   externalCohortId: string,
-  intake: { tab: string | null; timezone: string | null } = { tab: null, timezone: null },
+  intake: { tab: string | null; timezone: string | null; spreadsheetId: string | null } = { tab: null, timezone: null, spreadsheetId: null },
 ): Promise<void> {
   const { rows: others } = await db.query<{ id: string; name: string }>(
     'select id, name from cohorts where external_cohort_id = $1 and id <> $2',
@@ -336,9 +342,10 @@ async function bindExternalId(
             intake_mode = 'sheet',
             intake_tab_name = coalesce($3, intake_tab_name),
             intake_timezone = coalesce($4, intake_timezone),
+            intake_spreadsheet_id = coalesce($5, intake_spreadsheet_id),
             updated_at = now()
       where id = $1 and (external_cohort_id is null or external_cohort_id = $2)`,
-    [cohort.id, externalCohortId, intake.tab, intake.timezone],
+    [cohort.id, externalCohortId, intake.tab, intake.timezone, intake.spreadsheetId],
   );
   if (rowCount !== 1) throw new Error('The binding was not written; the cohort changed underneath this run.');
 }
@@ -556,7 +563,7 @@ async function main() {
     console.log('');
     console.log(`Applying to "${cohort.name}" (${cohort.id}) only…`);
     if (!cohort.external_cohort_id && options.bindExternalId) {
-      await bindExternalId(db, cohort, options.externalCohortId, { tab: options.intakeTab, timezone: options.intakeTimezone });
+      await bindExternalId(db, cohort, options.externalCohortId, { tab: options.intakeTab, timezone: options.intakeTimezone, spreadsheetId: options.intakeSpreadsheetId });
       done(`external id bound: ${options.externalCohortId}`);
     }
     if (ideaWork > 0) {

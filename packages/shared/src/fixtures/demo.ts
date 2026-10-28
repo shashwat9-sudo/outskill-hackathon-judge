@@ -126,6 +126,7 @@ export const DEMO_COHORT = {
   // fixtures are pre-seeded regardless of status so the admin side is populated.
   status: 'open' as const,
   intakeMode: 'portal' as const,
+  intakeSpreadsheetId: null,
   intakeTabName: null,
   intakeTimezone: null,
   finalisedAt: null,

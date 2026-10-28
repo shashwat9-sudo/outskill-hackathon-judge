@@ -176,8 +176,10 @@ export default async function CohortsPage({
                   title="Intake"
                   description={
                     cohort.intakeMode === 'sheet'
-                      ? `Imports from the Google Sheet tab “${cohort.intakeTabName ?? 'not set'}” as ${cohort.externalCohortId ?? 'no external ID'}. Only this tab is ever read for this cohort.`
-                      : 'Teams submit through the Judge participant portal. Switch to sheet intake to import from a tab of the shared spreadsheet.'
+                      ? `Imports from the Google Sheet tab “${cohort.intakeTabName ?? 'not set'}” (${cohort.intakeSpreadsheetId ? 'its own spreadsheet' : 'the default spreadsheet'}) as ${cohort.externalCohortId ?? 'no external ID'}. Only this tab is ever read for this cohort.`
+                      : cohort.intakeMode === 'partner'
+                        ? `Submissions arrive through the partner API as ${cohort.externalCohortId ?? 'no external ID'}.`
+                        : 'Teams submit through the Judge participant portal. Switch to sheet intake to import from a tab of a Google spreadsheet.'
                   }
                   level={3}
                 />
@@ -187,6 +189,7 @@ export default async function CohortsPage({
                   initial={{
                     intakeMode: cohort.intakeMode,
                     externalCohortId: cohort.externalCohortId,
+                    intakeSpreadsheetId: cohort.intakeSpreadsheetId,
                     intakeTabName: cohort.intakeTabName,
                     intakeTimezone: cohort.intakeTimezone,
                     timezone: cohort.timezone,

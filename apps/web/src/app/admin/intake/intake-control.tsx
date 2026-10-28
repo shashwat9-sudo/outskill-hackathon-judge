@@ -137,7 +137,12 @@ export function IntakeControl({
             { term: 'External cohort ID', description: config.externalCohortId ?? 'Not set' },
             { term: 'Sheet tab', description: config.tabName ?? 'Not set' },
             { term: 'Sheet timestamps read in', description: config.intakeTimezone ?? 'Not set' },
-            { term: 'Spreadsheet', description: config.spreadsheetIdMasked ?? 'Not set' },
+            {
+              term: 'Spreadsheet',
+              description: config.spreadsheetIdMasked
+                ? `${config.spreadsheetIdMasked} (${config.spreadsheetSource === 'cohort' ? "this cohort's own spreadsheet" : 'the default spreadsheet'})`
+                : 'Not set',
+            },
             {
               term: 'Reading as',
               description: config.serviceAccountEmail ?? 'Not set',

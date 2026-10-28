@@ -232,7 +232,7 @@ async function main() {
       // The cohort's own tab (0016) decides what is read; the single-tab
       // environment variable is only a fallback for a cohort configured before it.
       const tabFromCohort = cohort?.intakeTabName ?? null;
-      const config = readGoogleConfig(env, tabFromCohort);
+      const config = readGoogleConfig(env, tabFromCohort, cohort?.intakeSpreadsheetId ?? null);
       if (!config) {
         bad(
           tabFromCohort

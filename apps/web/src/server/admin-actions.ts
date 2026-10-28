@@ -19,8 +19,10 @@ import {
   isCohortIntakeMode,
   isValidTimeZone,
   normaliseExternalCohortId,
+  normaliseSpreadsheetId,
   normaliseTabName,
   validateExternalCohortId,
+  validateSpreadsheetId,
   validateTabName,
   type CohortIntakePatch,
   resultsExportFilename,
@@ -151,24 +153,15 @@ export async function createCohortAction(formData: FormData): Promise<AdminActio
   // so a sheet cohort never exists without the id and tab it imports under.
   const intakeModeRaw = String(formData.get('intakeMode') ?? 'portal');
   if (!isCohortIntakeMode(intakeModeRaw)) return { ok: false, error: 'Unknown intake mode.' };
-  let intake: CohortIntakePatch = { intakeMode: 'portal', externalCohortId: null, intakeTabName: null, intakeTimezone: null };
-  if (intakeModeRaw === 'sheet') {
-    const externalCohortId = normaliseExternalCohortId(String(formData.get('externalCohortId') ?? ''));
-    const tab = normaliseTabName(String(formData.get('intakeTabName') ?? ''));
-    const zone =
-      String(formData.get('intakeTimezone') ?? '').trim() || String(formData.get('timezone') ?? env.DEFAULT_TIMEZONE);
-    const problem = validateExternalCohortId(externalCohortId) ?? validateTabName(tab);
-    if (problem) return { ok: false, error: problem };
-    if (!isValidTimeZone(zone)) {
-      return {
-        ok: false,
-        error: `"${zone}" is not a timezone this system knows. Use an IANA name such as Asia/Kolkata or America/New_York.`,
-      };
-    }
-    if (await store.cohorts.getCohortByExternalId(externalCohortId)) {
-      return { ok: false, error: `External cohort ID "${externalCohortId}" is already used by another cohort.` };
-    }
-    intake = { intakeMode: 'sheet', externalCohortId, intakeTabName: tab, intakeTimezone: zone };
+  const parsedIntake = parseIntakeForm(
+    formData,
+    intakeModeRaw,
+    String(formData.get('timezone') ?? env.DEFAULT_TIMEZONE),
+  );
+  if (!parsedIntake.ok) return { ok: false, error: parsedIntake.error };
+  const intake = parsedIntake.patch;
+  if (intake.externalCohortId && (await store.cohorts.getCohortByExternalId(intake.externalCohortId))) {
+    return { ok: false, error: `External cohort ID "${intake.externalCohortId}" is already used by another cohort.` };
   }
 
   try {
@@ -278,6 +271,59 @@ export async function archiveCohortAction(formData: FormData): Promise<AdminActi
 }
 
 /**
+ * The intake fields of a cohort form, validated for shape (0016).
+ *
+ * Portal: nothing external. Partner API: an external id. Sheet: an external
+ * id, a tab, the zone its timestamps are written in, and optionally its own
+ * spreadsheet id (blank means the deployment's default spreadsheet, which is
+ * how the historical cohorts keep reading the file they came from).
+ */
+function parseIntakeForm(
+  formData: FormData,
+  mode: 'portal' | 'sheet' | 'partner',
+  fallbackZone: string,
+): { ok: true; patch: CohortIntakePatch } | { ok: false; error: string } {
+  if (mode === 'portal') {
+    return {
+      ok: true,
+      patch: { intakeMode: 'portal', externalCohortId: null, intakeSpreadsheetId: null, intakeTabName: null, intakeTimezone: null },
+    };
+  }
+  const externalCohortId = normaliseExternalCohortId(String(formData.get('externalCohortId') ?? ''));
+  const idProblem = validateExternalCohortId(externalCohortId);
+  if (idProblem) return { ok: false, error: idProblem };
+  if (mode === 'partner') {
+    return {
+      ok: true,
+      patch: { intakeMode: 'partner', externalCohortId, intakeSpreadsheetId: null, intakeTabName: null, intakeTimezone: null },
+    };
+  }
+  const tab = normaliseTabName(String(formData.get('intakeTabName') ?? ''));
+  const tabProblem = validateTabName(tab);
+  if (tabProblem) return { ok: false, error: tabProblem };
+  const spreadsheet = normaliseSpreadsheetId(String(formData.get('intakeSpreadsheetId') ?? ''));
+  const sheetProblem = validateSpreadsheetId(spreadsheet);
+  if (sheetProblem) return { ok: false, error: sheetProblem };
+  const zone = String(formData.get('intakeTimezone') ?? '').trim() || fallbackZone;
+  if (!isValidTimeZone(zone)) {
+    return {
+      ok: false,
+      error: `"${zone}" is not a timezone this system knows. Use an IANA name such as Asia/Kolkata or America/New_York.`,
+    };
+  }
+  return {
+    ok: true,
+    patch: {
+      intakeMode: 'sheet',
+      externalCohortId,
+      intakeSpreadsheetId: spreadsheet || null,
+      intakeTabName: tab,
+      intakeTimezone: zone,
+    },
+  };
+}
+
+/**
  * Where a cohort's submissions come from (0016).
  *
  * The only admin path that sets a cohort's external id and sheet tab. Validated
@@ -297,20 +343,9 @@ export async function updateCohortIntakeAction(formData: FormData): Promise<Admi
   const modeRaw = String(formData.get('intakeMode') ?? 'portal');
   if (!isCohortIntakeMode(modeRaw)) return { ok: false, error: 'Unknown intake mode.' };
 
-  let patch: CohortIntakePatch;
-  if (modeRaw === 'sheet') {
-    const externalCohortId = normaliseExternalCohortId(String(formData.get('externalCohortId') ?? ''));
-    const tab = normaliseTabName(String(formData.get('intakeTabName') ?? ''));
-    const zone = String(formData.get('intakeTimezone') ?? '').trim() || cohort.timezone;
-    const problem = validateExternalCohortId(externalCohortId) ?? validateTabName(tab);
-    if (problem) return { ok: false, error: problem };
-    if (!isValidTimeZone(zone)) {
-      return { ok: false, error: `"${zone}" is not a timezone this system knows. Use an IANA name such as Asia/Kolkata or America/New_York.` };
-    }
-    patch = { intakeMode: 'sheet', externalCohortId, intakeTabName: tab, intakeTimezone: zone };
-  } else {
-    patch = { intakeMode: 'portal', externalCohortId: null, intakeTabName: null, intakeTimezone: null };
-  }
+  const parsed = parseIntakeForm(formData, modeRaw, cohort.timezone);
+  if (!parsed.ok) return { ok: false, error: parsed.error };
+  const patch = parsed.patch;
 
   try {
     const updated = await store.cohorts.updateCohortIntake(cohortId, patch);
@@ -322,12 +357,14 @@ export async function updateCohortIntakeAction(formData: FormData): Promise<Admi
       before: {
         intakeMode: cohort.intakeMode,
         externalCohortId: cohort.externalCohortId,
+        intakeSpreadsheetId: cohort.intakeSpreadsheetId,
         intakeTabName: cohort.intakeTabName,
         intakeTimezone: cohort.intakeTimezone,
       },
       after: {
         intakeMode: updated.intakeMode,
         externalCohortId: updated.externalCohortId,
+        intakeSpreadsheetId: updated.intakeSpreadsheetId,
         intakeTabName: updated.intakeTabName,
         intakeTimezone: updated.intakeTimezone,
       },

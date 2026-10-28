@@ -267,9 +267,11 @@ export interface AdminAuthStore {
 }
 
 export interface CohortIntakePatch {
-  intakeMode: 'portal' | 'sheet';
-  /** Required for sheet intake; cleared for the portal. */
+  intakeMode: 'portal' | 'sheet' | 'partner';
+  /** Required for sheet and partner intake; cleared for the portal. */
   externalCohortId: string | null;
+  /** Sheet intake only; null means the deployment's default spreadsheet. */
+  intakeSpreadsheetId: string | null;
   intakeTabName: string | null;
   intakeTimezone: string | null;
 }
@@ -316,18 +318,21 @@ export interface CohortStore {
       | 'externalCohortId'
       | 'finalSelectionTarget'
       | 'intakeMode'
+      | 'intakeSpreadsheetId'
       | 'intakeTabName'
       | 'intakeTimezone'
     > & {
       /** How many winners this cohort records. Defaults to the historical four. */
       finalSelectionTarget?: number;
       /** Defaults to the Judge's own portal. Sheet intake is configured with `updateCohortIntake`. */
-      intakeMode?: 'portal' | 'sheet';
+      intakeMode?: 'portal' | 'sheet' | 'partner';
     },
   ): Promise<Cohort>;
   updateCohort(
     id: string,
-    patch: Partial<Omit<Cohort, 'isSynthetic' | 'externalCohortId' | 'intakeMode' | 'intakeTabName' | 'intakeTimezone'>>,
+    patch: Partial<
+      Omit<Cohort, 'isSynthetic' | 'externalCohortId' | 'intakeMode' | 'intakeSpreadsheetId' | 'intakeTabName' | 'intakeTimezone'>
+    >,
   ): Promise<Cohort>;
   /**
    * The cohort an external id (and therefore a sheet) maps to, or null.

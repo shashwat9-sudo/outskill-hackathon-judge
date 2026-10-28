@@ -87,11 +87,15 @@ export function readGoogleCredentials(
 export function readGoogleConfig(
   env: Record<string, string | undefined>,
   tabName?: string | null,
+  spreadsheetId?: string | null,
 ): GoogleSheetsConfig | null {
   const credentials = readGoogleCredentials(env);
   const tab = (tabName ?? env.GOOGLE_SHEETS_TAB_NAME)?.trim();
   if (!credentials || !tab) return null;
-  return { ...credentials, tabName: tab };
+  // A cohort may name its own spreadsheet (0016); the historical cohorts read
+  // the deployment default, which stays exactly as configured.
+  const sheet = spreadsheetId?.trim();
+  return { ...credentials, spreadsheetId: sheet || credentials.spreadsheetId, tabName: tab };
 }
 
 const base64url = (input: Buffer | string) =>

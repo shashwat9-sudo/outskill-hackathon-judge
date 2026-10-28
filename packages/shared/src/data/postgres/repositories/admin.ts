@@ -229,8 +229,11 @@ export function buildCohortStore(db: SqlDatabase): CohortStore {
           [id],
         );
         if (!current[0]) throw new RowNotFoundError('Cohort', id);
-        const externalCohortId = intake.intakeMode === 'sheet' ? intake.externalCohortId : null;
-        const tabName = intake.intakeMode === 'sheet' ? intake.intakeTabName : null;
+        const external = intake.intakeMode !== 'portal';
+        const sheet = intake.intakeMode === 'sheet';
+        const externalCohortId = external ? intake.externalCohortId : null;
+        const spreadsheetId = sheet ? intake.intakeSpreadsheetId : null;
+        const tabName = sheet ? intake.intakeTabName : null;
         if (
           current[0].external_cohort_id &&
           externalCohortId !== current[0].external_cohort_id &&
@@ -248,9 +251,13 @@ export function buildCohortStore(db: SqlDatabase): CohortStore {
           if (clash[0]) throw new Error(`External cohort ID "${externalCohortId}" is already used by cohort "${clash[0].name}".`);
         }
         if (tabName) {
+          // One tab feeds one cohort within a spreadsheet.
           const { rows: clash } = await tx.query<{ name: string }>(
-            'select name from cohorts where lower(intake_tab_name) = lower($1) and id <> $2',
-            [tabName, id],
+            `select name from cohorts
+              where lower(intake_tab_name) = lower($1)
+                and coalesce(intake_spreadsheet_id, '') = coalesce($3, '')
+                and id <> $2`,
+            [tabName, id, spreadsheetId],
           );
           if (clash[0]) throw new Error(`Sheet tab "${tabName}" is already read by cohort "${clash[0].name}".`);
         }
@@ -258,11 +265,12 @@ export function buildCohortStore(db: SqlDatabase): CohortStore {
           `update cohorts
               set intake_mode = $2,
                   external_cohort_id = $3,
-                  intake_tab_name = $4,
-                  intake_timezone = $5,
+                  intake_spreadsheet_id = $4,
+                  intake_tab_name = $5,
+                  intake_timezone = $6,
                   updated_at = now()
             where id = $1`,
-          [id, intake.intakeMode, externalCohortId, tabName, intake.intakeMode === 'sheet' ? intake.intakeTimezone : null],
+          [id, intake.intakeMode, externalCohortId, spreadsheetId, tabName, sheet ? intake.intakeTimezone : null],
         );
         const { rows } = await tx.query(`${COHORT_SELECT} where c.id = $1`, [id]);
         return mapCohort(rows[0] as Record<string, unknown>);

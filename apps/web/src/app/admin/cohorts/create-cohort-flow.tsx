@@ -31,6 +31,7 @@ export function CreateCohortFlow({ csrfToken }: { csrfToken: string }) {
     submissionInstructions: '',
     intakeMode: 'portal',
     externalCohortId: '',
+    intakeSpreadsheetId: '',
     intakeTabName: '',
     intakeTimezone: 'Asia/Kolkata',
   });
@@ -42,7 +43,8 @@ export function CreateCohortFlow({ csrfToken }: { csrfToken: string }) {
   const basicsValid =
     values.name.trim().length > 0 &&
     values.code.trim().length > 0 &&
-    (!sheet || (values.externalCohortId.trim().length > 0 && values.intakeTabName.trim().length > 0));
+    (values.intakeMode === 'portal' || values.externalCohortId.trim().length > 0) &&
+    (!sheet || values.intakeTabName.trim().length > 0);
   const scheduleValid = values.day12StartAt !== '' && values.day13DeadlineAt !== '';
 
   const submit = async () => {
@@ -174,23 +176,40 @@ export function CreateCohortFlow({ csrfToken }: { csrfToken: string }) {
                   >
                     <option value="portal">Judge participant portal</option>
                     <option value="sheet">External Google Sheet intake</option>
+                    <option value="partner">Partner API</option>
                   </select>
                 )}
               </Field>
+              {values.intakeMode !== 'portal' && (
+                <Field
+                  id="cohort-external-id"
+                  label="External cohort ID"
+                  required
+                  hint="Exactly as the intake will import it, e.g. AIAP-C15-IST. One cohort per ID."
+                >
+                  {(aria) => (
+                    <Input
+                      {...aria}
+                      value={values.externalCohortId}
+                      onChange={(e) => set('externalCohortId', e.target.value)}
+                      placeholder="AIAP-C15-IST"
+                    />
+                  )}
+                </Field>
+              )}
               {sheet && (
                 <>
                   <Field
-                    id="cohort-external-id"
-                    label="External cohort ID"
-                    required
-                    hint="Exactly as the intake will import it, e.g. AIAP-C15-IST. One cohort per ID."
+                    id="cohort-intake-spreadsheet"
+                    label="Spreadsheet ID"
+                    hint="From the sheet's URL (…/spreadsheets/d/<ID>/…). Leave blank to read the default spreadsheet."
                   >
                     {(aria) => (
                       <Input
                         {...aria}
-                        value={values.externalCohortId}
-                        onChange={(e) => set('externalCohortId', e.target.value)}
-                        placeholder="AIAP-C15-IST"
+                        value={values.intakeSpreadsheetId}
+                        onChange={(e) => set('intakeSpreadsheetId', e.target.value)}
+                        placeholder="1AbC…"
                       />
                     )}
                   </Field>
@@ -198,7 +217,7 @@ export function CreateCohortFlow({ csrfToken }: { csrfToken: string }) {
                     id="cohort-intake-tab"
                     label="Google Sheet tab"
                     required
-                    hint="The tab in the shared spreadsheet this cohort reads. One tab per cohort."
+                    hint="The tab this cohort reads. One tab per cohort within a spreadsheet."
                   >
                     {(aria) => (
                       <Input
