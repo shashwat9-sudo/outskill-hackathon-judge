@@ -1002,6 +1002,9 @@ export class MemoryDataStore implements DataStore {
           // Postgres. The input type cannot carry this field.
           isSynthetic: false,
           externalCohortId: null,
+          intakeMode: input.intakeMode ?? 'portal',
+          intakeTabName: null,
+          intakeTimezone: null,
           createdAt: new Date(),
           updatedAt: new Date(),
         };
@@ -1011,7 +1014,46 @@ export class MemoryDataStore implements DataStore {
       updateCohort: async (id, patch) => {
         const cohort = this.db.cohorts.find((c) => c.id === id);
         if (!cohort) throw new Error(`Cohort ${id} not found.`);
-        Object.assign(cohort, patch, { id: cohort.id, updatedAt: new Date() });
+        const writable = { ...patch } as Record<string, unknown>;
+        // Set only through updateCohortIntake, as in Postgres.
+        delete writable.externalCohortId;
+        delete writable.intakeMode;
+        delete writable.intakeTabName;
+        delete writable.intakeTimezone;
+        Object.assign(cohort, writable, { id: cohort.id, updatedAt: new Date() });
+        return clone(cohort);
+      },
+      getCohortByExternalId: async (externalCohortId) => {
+        const id = externalCohortId.trim();
+        const cohort = id ? this.db.cohorts.find((c) => c.externalCohortId === id) : undefined;
+        return cohort ? clone(cohort) : null;
+      },
+      updateCohortIntake: async (id, intake) => {
+        const cohort = this.db.cohorts.find((c) => c.id === id);
+        if (!cohort) throw new Error(`Cohort ${id} not found.`);
+        const externalCohortId = intake.intakeMode === 'sheet' ? intake.externalCohortId : null;
+        const tabName = intake.intakeMode === 'sheet' ? intake.intakeTabName : null;
+        const imported = this.db.submissions.filter(
+          (s) => s.cohortId === id && Boolean((s as { externalSubmissionId?: string | null }).externalSubmissionId),
+        ).length;
+        if (cohort.externalCohortId && externalCohortId !== cohort.externalCohortId && imported > 0) {
+          throw new Error(
+            'This cohort already holds imported submissions under its external cohort ID; the ID cannot be changed.',
+          );
+        }
+        const idClash = externalCohortId
+          ? this.db.cohorts.find((c) => c.id !== id && c.externalCohortId === externalCohortId)
+          : undefined;
+        if (idClash) throw new Error(`External cohort ID "${externalCohortId}" is already used by cohort "${idClash.name}".`);
+        const tabClash = tabName
+          ? this.db.cohorts.find((c) => c.id !== id && c.intakeTabName?.toLowerCase() === tabName.toLowerCase())
+          : undefined;
+        if (tabClash) throw new Error(`Sheet tab "${tabName}" is already read by cohort "${tabClash.name}".`);
+        cohort.intakeMode = intake.intakeMode;
+        cohort.externalCohortId = externalCohortId;
+        cohort.intakeTabName = tabName;
+        cohort.intakeTimezone = intake.intakeMode === 'sheet' ? intake.intakeTimezone : null;
+        cohort.updatedAt = new Date();
         return clone(cohort);
       },
       getCohortDependencies: async (id) => {
@@ -1763,9 +1805,13 @@ export class MemoryDataStore implements DataStore {
        */
       claimJobs: async ({ workerId, limit, leaseSeconds }) => {
         const now = Date.now();
+        // Only a cohort whose judging an operator has started may be worked on
+        // (ADR-035): an imported cohort's jobs wait in the queue until then.
+        const judging = new Set(this.db.cohorts.filter((c) => c.status === 'judging').map((c) => c.id));
         const claimable = this.db.jobs
           .filter((job) => {
             if (!CLAIMABLE_STAGES.includes(job.stage)) return false;
+            if (!judging.has(job.cohortId)) return false;
             if (job.leaseExpiresAt && job.leaseExpiresAt.getTime() > now) return false;
             if (job.nextAttemptAt && job.nextAttemptAt.getTime() > now) return false;
             return true;

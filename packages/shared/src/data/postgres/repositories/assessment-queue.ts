@@ -225,6 +225,14 @@ export function buildQueueMethods(db: SqlDatabase): QueueMethods {
              -- enum array, and this form is identical to Postgres. Verified to
              -- still use assessment_jobs_claim via an index scan.
              where c.stage = any($3::text[]::assessment_stage[])
+               -- Only a cohort whose judging an operator has started (ADR-035).
+               -- Import queues a cohort's jobs; "Start judging" is what makes
+               -- them claimable, so two cohorts sharing this queue are each
+               -- judged exactly when their operator says so.
+               and exists (
+                 select 1 from cohorts co
+                  where co.id = c.cohort_id and co.status = 'judging'
+               )
                and (
                  c.claimed_by is null
                  or c.lease_expires_at < now()
@@ -258,6 +266,9 @@ export function buildQueueMethods(db: SqlDatabase): QueueMethods {
             j.claimed_by is null
             or j.lease_expires_at < now()
             or (j.claimed_by = $1 and j.lease_expires_at > now())
+          )
+          and exists (
+            select 1 from cohorts co where co.id = j.cohort_id and co.status = 'judging'
           )
         returning j.*`,
         [input.workerId, leaseSeconds, [...CLAIMABLE_STAGES], limit],

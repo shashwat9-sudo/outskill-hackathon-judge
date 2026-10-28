@@ -1,4 +1,5 @@
 import type { PartnerSubmissionInput } from '../data/postgres/repositories/partner';
+import { wallClockToInstant } from '../domain/cohort-intake';
 
 /*
  * The CSV fallback reuses `parseCsv` from `utils/csv`. A second reader would
@@ -237,13 +238,29 @@ export function normaliseAccessMode(value: string): 'open' | 'credentials' | nul
  * read returns null rather than a guess: an invented date would silently decide
  * which of a team's submissions gets judged.
  */
-export function parseSheetTimestamp(value: string): Date | null {
+export function parseSheetTimestamp(value: string, timeZone?: string): Date | null {
   const raw = value.trim();
   if (!raw) return null;
 
-  // `2026-09-11 17:42:03` — Forms' default. Treated as ISO by making the
-  // separator explicit; anything else falls through to Date's own parsing.
+  // `2026-09-11 17:42:03` — Forms' default, written in the spreadsheet's own
+  // zone with no offset. With a configured zone it is read as wall-clock time
+  // there; without one it is treated as ISO by making the separator explicit
+  // (server-local, which is what the pre-0016 intake did). Anything else falls
+  // through to Date's own parsing.
   const iso = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(:(\d{2}))?$/.exec(raw);
+  if (iso && timeZone) {
+    return wallClockToInstant(
+      {
+        year: Number(iso[1]),
+        month: Number(iso[2]),
+        day: Number(iso[3]),
+        hour: Number(iso[4]),
+        minute: Number(iso[5]),
+        second: Number(iso[7] ?? 0),
+      },
+      timeZone,
+    );
+  }
   const parsed = iso ? new Date(raw.replace(' ', 'T')) : new Date(raw);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
@@ -276,6 +293,8 @@ export function isSyntacticallyValidUrl(value: string): boolean {
 export interface ParseOptions {
   /** Slugs of the approved ideas. A Category must match one of them. */
   approvedCategories: { slug: string; title: string }[];
+  /** IANA zone the sheet's Form timestamps are written in. Omit to read them as before. */
+  timezone?: string;
 }
 
 /**
@@ -363,12 +382,17 @@ function normaliseRow(
 
   if (issues.length > 0) return { ok: false, issues };
 
+  // Read once, in the sheet's configured zone, and carried into the stored
+  // record as an instant — so the lateness decision never depends on whatever
+  // zone the server that imported the row happened to run in.
+  const submittedAt = parseSheetTimestamp(get('Timestamp'), options.timezone);
+
   return {
     ok: true,
     value: {
       row: rowNumber,
       groupNumber: groupNumber!,
-      submittedAt: parseSheetTimestamp(get('Timestamp')),
+      submittedAt,
       input: {
         groupNumber: groupNumber!,
         ideaSlug: category!.slug,
@@ -383,7 +407,7 @@ function normaliseRow(
         judgeCredentials: null,
         loomUrl: loomUrl || null,
         deckUrl: deckUrl || null,
-        submittedAt: get('Timestamp') || null,
+        submittedAt: submittedAt ? submittedAt.toISOString() : get('Timestamp') || null,
       },
       credentials,
     },

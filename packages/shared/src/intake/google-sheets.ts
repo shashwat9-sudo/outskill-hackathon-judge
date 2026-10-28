@@ -66,21 +66,32 @@ export function normalisePrivateKey(raw: string): string {
     .replace(/\\n/g, '\n');
 }
 
-export function readGoogleConfig(
+/** The shared part: one service account and one spreadsheet serve every cohort. */
+export function readGoogleCredentials(
   env: Record<string, string | undefined>,
-): GoogleSheetsConfig | null {
+): Omit<GoogleSheetsConfig, 'tabName'> | null {
   const serviceAccountEmail = env.GOOGLE_SERVICE_ACCOUNT_EMAIL?.trim();
   const rawKey = env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY;
   const spreadsheetId = env.GOOGLE_SHEETS_SPREADSHEET_ID?.trim();
-  const tabName = env.GOOGLE_SHEETS_TAB_NAME?.trim();
+  if (!serviceAccountEmail || !rawKey || !spreadsheetId) return null;
+  return { serviceAccountEmail, privateKey: normalisePrivateKey(rawKey), spreadsheetId };
+}
 
-  if (!serviceAccountEmail || !rawKey || !spreadsheetId || !tabName) return null;
-  return {
-    serviceAccountEmail,
-    privateKey: normalisePrivateKey(rawKey),
-    spreadsheetId,
-    tabName,
-  };
+/**
+ * Credentials plus the tab to read.
+ *
+ * The tab is the cohort's (`cohorts.intake_tab_name`, 0016) when the caller
+ * passes it; the legacy single-tab environment variable is only a fallback for
+ * scripts that predate per-cohort intake. Null when anything is missing.
+ */
+export function readGoogleConfig(
+  env: Record<string, string | undefined>,
+  tabName?: string | null,
+): GoogleSheetsConfig | null {
+  const credentials = readGoogleCredentials(env);
+  const tab = (tabName ?? env.GOOGLE_SHEETS_TAB_NAME)?.trim();
+  if (!credentials || !tab) return null;
+  return { ...credentials, tabName: tab };
 }
 
 const base64url = (input: Buffer | string) =>
@@ -199,7 +210,7 @@ export function googleSheetsSource(
         if (response.status === 400) {
           // Sheets answers 400 for a range naming a tab that is not there.
           throw new GoogleSheetsError(
-            `No tab named "${config.tabName}" in that spreadsheet. Check GOOGLE_SHEETS_TAB_NAME.`,
+            `No tab named "${config.tabName}" in that spreadsheet. Check the cohort's intake tab name.`,
             'missing_tab',
           );
         }

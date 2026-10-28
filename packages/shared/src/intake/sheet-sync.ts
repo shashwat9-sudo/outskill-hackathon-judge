@@ -87,6 +87,16 @@ export interface SyncOptions {
   /** Server configuration. Never a column in the sheet. */
   externalCohortId: string;
   cohortName: string;
+  /**
+   * The Judge cohort the operator selected (0016).
+   *
+   * When set, the sync refuses unless that cohort exists and is the one
+   * mapped to `externalCohortId`, and it never creates a cohort. The partner
+   * API path leaves this unset and may create the cohort it names.
+   */
+  cohortId?: string;
+  /** IANA zone the sheet's Form timestamps are written in. */
+  sourceTimezone?: string;
   /** True to validate and report without writing anything. */
   dryRun: boolean;
   /**
@@ -113,6 +123,33 @@ export function fingerprintRows(rows: { groupNumber: number; input: unknown; cre
     .sort((a, b) => a.groupNumber - b.groupNumber)
     .map((r) => ({ group: r.groupNumber, input: r.input, hasCredentials: r.credentials !== null }));
   return createHash('sha256').update(JSON.stringify(canonical)).digest('hex').slice(0, 32);
+}
+
+/**
+ * The fingerprint an operator is shown, bound to where the rows came from and
+ * where they would go.
+ *
+ * Two tabs of one spreadsheet can hold identical rows; a dry run of the IST
+ * tab must not authorise an import into the EST cohort. So the source
+ * (spreadsheet, tab) and the destination (cohort id, external id) are part of
+ * the hash, and a fingerprint from any other combination is simply a mismatch.
+ */
+export function bindFingerprint(
+  rowsFingerprint: string,
+  scope: { spreadsheetId: string | null; tabName: string | null; cohortId: string | null; externalCohortId: string },
+): string {
+  return createHash('sha256')
+    .update(
+      JSON.stringify({
+        rows: rowsFingerprint,
+        spreadsheet: scope.spreadsheetId ?? '',
+        tab: scope.tabName ?? '',
+        cohort: scope.cohortId ?? '',
+        external: scope.externalCohortId,
+      }),
+    )
+    .digest('hex')
+    .slice(0, 32);
 }
 
 /** The judging-relevant shape of a stored snapshot, for change detection. */
@@ -208,13 +245,31 @@ export async function syncSheet(options: SyncOptions): Promise<SyncReport> {
    * which lets a cohort keep ideas that were customised for it while making the
    * common case correct before anything exists.
    */
-  const cohorts = await options.store.cohorts.listCohorts();
-  const mapped = cohorts.find(
-    (c) => (c as { externalCohortId?: string }).externalCohortId === options.externalCohortId,
-  );
-  const cohortIdeas = mapped
-    ? (await options.store.cohorts.listIdeas(mapped.id)).map((i) => ({ slug: i.slug, title: i.title }))
-    : [];
+  const mapped = (await options.store.cohorts.getCohortByExternalId(options.externalCohortId)) ?? undefined;
+  /*
+   * The selected cohort decides everything (0016). A dry run or import asked
+   * for cohort X must act on X's tab and write into X; if the external id on
+   * the sheet configuration maps elsewhere, that is a configuration fault to
+   * surface, never something to resolve by guessing.
+   */
+  if (options.cohortId) {
+    const selected = await options.store.cohorts.getCohort(options.cohortId);
+    if (!selected) return { ...base, fatalError: 'The selected cohort no longer exists.' };
+    if (!mapped) {
+      return {
+        ...base,
+        fatalError: `No cohort is mapped to external cohort ID "${options.externalCohortId}". Set it on the cohort's intake settings before importing.`,
+      };
+    }
+    if (mapped.id !== selected.id) {
+      return {
+        ...base,
+        fatalError: `External cohort ID "${options.externalCohortId}" is mapped to cohort "${mapped.name}", not to the selected cohort "${selected.name}". Intake refuses to guess.`,
+      };
+    }
+  }
+  const mappedIdeas = mapped ? await options.store.cohorts.listIdeas(mapped.id) : [];
+  const cohortIdeas = mappedIdeas.map((i) => ({ slug: i.slug, title: i.title }));
   /*
    * Before a cohort is mapped, the catalogue declared for this external id
    * is what the sheet's Category column is checked against — AIAP-C14's eight
@@ -230,7 +285,10 @@ export async function syncSheet(options: SyncOptions): Promise<SyncReport> {
         ? catalogueCategories(declared.ideas)
         : [...APPROVED_IDEA_LABELS];
 
-  const parsed: ParsedIntakeSheet = parseSheetRows(rows, { approvedCategories });
+  const parsed: ParsedIntakeSheet = parseSheetRows(rows, {
+    approvedCategories,
+    ...(options.sourceTimezone ? { timezone: options.sourceTimezone } : {}),
+  });
 
   /*
    * What is already here, and whether the sheet still says the same thing.
@@ -333,7 +391,12 @@ export async function syncSheet(options: SyncOptions): Promise<SyncReport> {
     ...base,
     groups,
     changedSinceSync,
-    fingerprint: fingerprintRows(parsed.valid),
+    fingerprint: bindFingerprint(fingerprintRows(parsed.valid), {
+      spreadsheetId: described.spreadsheetId ?? null,
+      tabName: described.tabName ?? null,
+      cohortId: mapped?.id ?? null,
+      externalCohortId: options.externalCohortId,
+    }),
     judgeCohortId: mapped?.id ?? null,
     rowsRead: parsed.rowsRead,
     blankRowsIgnored: parsed.blankRowsIgnored,
@@ -372,12 +435,31 @@ export async function syncSheet(options: SyncOptions): Promise<SyncReport> {
     };
   }
 
-  const synced = await options.store.partner.syncCohort({
-    externalCohortId: options.externalCohortId,
-    name: options.cohortName,
-  });
-  if (!synced.ok) return { ...report, fatalError: synced.error ?? 'Could not sync the cohort.' };
-  report.judgeCohortId = synced.cohortId ?? null;
+  if (options.cohortId && mapped) {
+    /*
+     * The operator selected a cohort, so that cohort — already verified above
+     * to be the one this external id maps to — is the destination. Nothing is
+     * created, renamed or re-dated: the admin screen owns the cohort record.
+     * An import also needs the cohort's own approved ideas; without them the
+     * Category check above ran against a fallback list, which is fine for a
+     * check but not for the import that fixes every team's idea.
+     */
+    const approved = mappedIdeas.filter((i) => i.isActive && i.definitionStatus === 'approved');
+    if (approved.length === 0) {
+      return {
+        ...report,
+        fatalError: `Cohort "${mapped.name}" has no approved ideas yet. Approve its idea catalogue before importing.`,
+      };
+    }
+    report.judgeCohortId = mapped.id;
+  } else {
+    const synced = await options.store.partner.syncCohort({
+      externalCohortId: options.externalCohortId,
+      name: options.cohortName,
+    });
+    if (!synced.ok) return { ...report, fatalError: synced.error ?? 'Could not sync the cohort.' };
+    report.judgeCohortId = synced.cohortId ?? null;
+  }
 
   for (const row of parsed.valid) {
     const result = await options.store.partner.ingestSubmission({

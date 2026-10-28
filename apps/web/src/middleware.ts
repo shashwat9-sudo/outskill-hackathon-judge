@@ -17,10 +17,13 @@ import { NextResponse, type NextRequest } from 'next/server';
  * themselves — a middleware is not an authorisation boundary.
  */
 export const PATHNAME_HEADER = 'x-ohj-pathname';
+/** The request's query string, so a layout can honour `?cohort=` like a page does. */
+export const SEARCH_HEADER = 'x-ohj-search';
 
 export function middleware(request: NextRequest) {
   const headers = new Headers(request.headers);
   headers.set(PATHNAME_HEADER, request.nextUrl.pathname);
+  headers.set(SEARCH_HEADER, request.nextUrl.search);
   return NextResponse.next({ request: { headers } });
 }
 

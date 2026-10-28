@@ -10,6 +10,8 @@ import {
 } from '@ohj/shared';
 import { getDemoStore, getStoreAsync, isDemo } from '@/lib/store';
 import { requireAdmin } from '@/server/admin-auth';
+import { selectAdminCohort } from '@/lib/admin-cohort';
+import { CohortSwitcher } from '@/components/cohort-switcher';
 import {
   Alert,
   Badge,
@@ -33,13 +35,21 @@ export const dynamic = 'force-dynamic';
  * what stage is the cohort in, what is done, what needs attention, what should
  * I do next, and will the shortlist be ready on time.
  */
-export default async function AdminOverviewPage() {
+export default async function AdminOverviewPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ cohort?: string }>;
+}) {
   const session = await requireAdmin();
   const store = await getStoreAsync();
   const demo = getDemoStore();
   const cohorts = await store.cohorts.listCohorts();
-  const cohort = cohorts.find((c) => c.status === 'judging' || c.status === 'open') ?? cohorts[0];
+  const selection = selectAdminCohort(cohorts, (await searchParams).cohort);
+  const cohort = selection.cohort;
 
+  if (selection.notFound) {
+    return <EmptyState title="Cohort not found" description="No cohort has the id in this link. Open Cohorts and choose one." />;
+  }
   if (!cohort) {
     return (
       <EmptyState
@@ -120,6 +130,8 @@ export default async function AdminOverviewPage() {
           previewHref={previewToken ? `/submit/${previewToken}` : null}
         />
       )}
+
+      <CohortSwitcher path="/admin" cohorts={cohorts} selectedId={cohort.id} explicit={selection.explicit} />
 
       <PageHeading
         eyebrow="AI Accelerator"

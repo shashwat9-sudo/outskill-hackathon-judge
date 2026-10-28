@@ -22,12 +22,17 @@ vi.mock('@/server/intake-actions', async () => ({
 
 const config: IntakeConfig = {
   configured: true,
+  cohortId: 'uuid-1',
+  cohortName: 'AI Accelerator Cohort 13',
+  cohortCode: 'AIAP13',
+  cohortStatus: 'closed',
   serviceAccountEmail: 'outskill-hackathon-judge@outskill-hackathon-judge.iam.gserviceaccount.com',
   expectedServiceAccount: 'outskill-hackathon-judge@outskill-hackathon-judge.iam.gserviceaccount.com',
   externalCohortId: 'AIAP-C13',
-  cohortName: 'AI Accelerator Cohort 13',
   tabName: 'Form Responses 1',
+  intakeTimezone: 'Asia/Kolkata',
   spreadsheetIdMasked: 'sheet-…3456',
+  approvedIdeas: 8,
   missing: [],
 };
 
@@ -214,7 +219,7 @@ describe('after importing', () => {
     await user.click(screen.getByRole('button', { name: /Confirm & import/ }));
 
     expect(await screen.findByText(/Judging has not started yet/i)).toBeTruthy();
-    expect(screen.getByText(/judging worker must be online/i)).toBeTruthy();
+    expect(screen.getByText(/not judged until you press/i)).toBeTruthy();
     expect(screen.getByRole('link', { name: /View submissions/i })).toBeTruthy();
     expect(screen.getByRole('link', { name: /View judging status/i })).toBeTruthy();
     expect(screen.getByRole('link', { name: /View shortlist/i })).toBeTruthy();

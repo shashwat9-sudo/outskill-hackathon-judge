@@ -50,7 +50,7 @@ export async function makeCohort(db: SqlDatabase, code = 'ASSESS'): Promise<Coho
     submissionInstructions: '',
     rubricVersion: 'rubric-v2',
     assessmentConfig: CONFIG,
-    status: 'draft',
+    status: 'judging',
     closedAt: null,
     closureType: null,
     acceptingUntil: null,

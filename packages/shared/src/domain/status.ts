@@ -184,8 +184,26 @@ function check<T extends string>(
   return { allowed: true };
 }
 
-export function canTransitionCohort(from: CohortStatus, to: CohortStatus): TransitionResult {
-  return check(COHORT_TRANSITIONS, 'cohort', from, to);
+/**
+ * A sheet-fed cohort never opens the participant portal: its submissions
+ * arrive by import, so it goes straight from `draft` to `closed`, the state
+ * from which judging is started. Everything after `closed` is the same.
+ */
+const SHEET_COHORT_TRANSITIONS: Record<CohortStatus, readonly CohortStatus[]> = {
+  ...COHORT_TRANSITIONS,
+  draft: ['closed', 'open', 'archived'],
+};
+
+export function cohortTransitionsFor(intakeMode: 'portal' | 'sheet' = 'portal'): Record<CohortStatus, readonly CohortStatus[]> {
+  return intakeMode === 'sheet' ? SHEET_COHORT_TRANSITIONS : COHORT_TRANSITIONS;
+}
+
+export function canTransitionCohort(
+  from: CohortStatus,
+  to: CohortStatus,
+  options: { intakeMode?: 'portal' | 'sheet' } = {},
+): TransitionResult {
+  return check(cohortTransitionsFor(options.intakeMode), 'cohort', from, to);
 }
 
 export function canTransitionSubmission(

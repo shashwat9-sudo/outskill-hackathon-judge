@@ -266,6 +266,14 @@ export interface AdminAuthStore {
   revokeAllSessions(): Promise<void>;
 }
 
+export interface CohortIntakePatch {
+  intakeMode: 'portal' | 'sheet';
+  /** Required for sheet intake; cleared for the portal. */
+  externalCohortId: string | null;
+  intakeTabName: string | null;
+  intakeTimezone: string | null;
+}
+
 export interface CohortStore {
   listCohorts(): Promise<Cohort[]>;
   getCohort(id: string): Promise<Cohort | null>;
@@ -300,13 +308,42 @@ export interface CohortStore {
   createCohort(
     input: Omit<
       Cohort,
-      'id' | 'createdAt' | 'updatedAt' | 'finalisedAt' | 'isSynthetic' | 'externalCohortId' | 'finalSelectionTarget'
+      | 'id'
+      | 'createdAt'
+      | 'updatedAt'
+      | 'finalisedAt'
+      | 'isSynthetic'
+      | 'externalCohortId'
+      | 'finalSelectionTarget'
+      | 'intakeMode'
+      | 'intakeTabName'
+      | 'intakeTimezone'
     > & {
       /** How many winners this cohort records. Defaults to the historical four. */
       finalSelectionTarget?: number;
+      /** Defaults to the Judge's own portal. Sheet intake is configured with `updateCohortIntake`. */
+      intakeMode?: 'portal' | 'sheet';
     },
   ): Promise<Cohort>;
-  updateCohort(id: string, patch: Partial<Omit<Cohort, 'isSynthetic' | 'externalCohortId'>>): Promise<Cohort>;
+  updateCohort(
+    id: string,
+    patch: Partial<Omit<Cohort, 'isSynthetic' | 'externalCohortId' | 'intakeMode' | 'intakeTabName' | 'intakeTimezone'>>,
+  ): Promise<Cohort>;
+  /**
+   * The cohort an external id (and therefore a sheet) maps to, or null.
+   * Exactly one cohort may carry a given external id (unique index, 0010).
+   */
+  getCohortByExternalId(externalCohortId: string): Promise<Cohort | null>;
+  /**
+   * Where this cohort's submissions come from.
+   *
+   * The only path that sets `externalCohortId` and the intake tab from the
+   * admin surface. Refuses an external id or a tab already used by another
+   * cohort, so two cohorts can never read the same tab or compete for the same
+   * rows, and refuses to change the external id of a cohort that already holds
+   * imported submissions.
+   */
+  updateCohortIntake(id: string, intake: CohortIntakePatch): Promise<Cohort>;
   setCohortStatus(id: string, status: CohortStatus): Promise<Cohort>;
 
   /** Manual close. Records when and that it was an admin action. */

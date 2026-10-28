@@ -16,6 +16,13 @@ import {
   MAX_FINAL_SELECTION_TARGET,
   MIN_FINAL_SELECTION_TARGET,
   canTransitionCohort,
+  isCohortIntakeMode,
+  isValidTimeZone,
+  normaliseExternalCohortId,
+  normaliseTabName,
+  validateExternalCohortId,
+  validateTabName,
+  type CohortIntakePatch,
   resultsExportFilename,
   buildSubmissionsAuditCsv,
   submissionsAuditFilename,
@@ -140,8 +147,33 @@ export async function createCohortAction(formData: FormData): Promise<AdminActio
     return { ok: false, error: 'The Day 13 deadline must be after the Day 12 start.' };
   }
 
+  // Where submissions come from (0016). Validated before anything is created,
+  // so a sheet cohort never exists without the id and tab it imports under.
+  const intakeModeRaw = String(formData.get('intakeMode') ?? 'portal');
+  if (!isCohortIntakeMode(intakeModeRaw)) return { ok: false, error: 'Unknown intake mode.' };
+  let intake: CohortIntakePatch = { intakeMode: 'portal', externalCohortId: null, intakeTabName: null, intakeTimezone: null };
+  if (intakeModeRaw === 'sheet') {
+    const externalCohortId = normaliseExternalCohortId(String(formData.get('externalCohortId') ?? ''));
+    const tab = normaliseTabName(String(formData.get('intakeTabName') ?? ''));
+    const zone =
+      String(formData.get('intakeTimezone') ?? '').trim() || String(formData.get('timezone') ?? env.DEFAULT_TIMEZONE);
+    const problem = validateExternalCohortId(externalCohortId) ?? validateTabName(tab);
+    if (problem) return { ok: false, error: problem };
+    if (!isValidTimeZone(zone)) {
+      return {
+        ok: false,
+        error: `"${zone}" is not a timezone this system knows. Use an IANA name such as Asia/Kolkata or America/New_York.`,
+      };
+    }
+    if (await store.cohorts.getCohortByExternalId(externalCohortId)) {
+      return { ok: false, error: `External cohort ID "${externalCohortId}" is already used by another cohort.` };
+    }
+    intake = { intakeMode: 'sheet', externalCohortId, intakeTabName: tab, intakeTimezone: zone };
+  }
+
   try {
     const cohort = await store.cohorts.createCohort({
+      intakeMode: intake.intakeMode,
       name,
       code,
       description: String(formData.get('description') ?? ''),
@@ -168,6 +200,11 @@ export async function createCohortAction(formData: FormData): Promise<AdminActio
       },
       status: 'draft',
     });
+    if (intake.intakeMode === 'sheet') {
+      // Uniqueness of the id and the tab is enforced by the store (and by the
+      // database), so two cohorts can never read the same tab.
+      await store.cohorts.updateCohortIntake(cohort.id, intake);
+    }
 
     // Seed the approved ideas so a new cohort is immediately usable.
     const existing = await store.cohorts.listCohorts();
@@ -179,7 +216,13 @@ export async function createCohortAction(formData: FormData): Promise<AdminActio
       entityType: 'cohort',
       entityId: cohort.id,
       cohortId: cohort.id,
-      after: { name, code },
+      after: {
+        name,
+        code,
+        intakeMode: intake.intakeMode,
+        externalCohortId: intake.externalCohortId,
+        intakeTabName: intake.intakeTabName,
+      },
     });
     revalidatePath('/admin/cohorts');
     return { ok: true, message: `Cohort “${name}” created.` };
@@ -234,6 +277,75 @@ export async function archiveCohortAction(formData: FormData): Promise<AdminActi
   };
 }
 
+/**
+ * Where a cohort's submissions come from (0016).
+ *
+ * The only admin path that sets a cohort's external id and sheet tab. Validated
+ * here for shape and on the store for uniqueness: two cohorts can never read the
+ * same tab or import under the same external id, and a cohort that already
+ * holds imported submissions keeps its id. Saving reads no sheet and queues
+ * nothing.
+ */
+export async function updateCohortIntakeAction(formData: FormData): Promise<AdminActionResult> {
+  await requireAdmin();
+  await assertCsrf(String(formData.get('csrf') ?? ''));
+  const store = await getStoreAsync();
+  const cohortId = String(formData.get('cohortId') ?? '');
+  const cohort = await store.cohorts.getCohort(cohortId);
+  if (!cohort) return { ok: false, error: 'Cohort not found.' };
+
+  const modeRaw = String(formData.get('intakeMode') ?? 'portal');
+  if (!isCohortIntakeMode(modeRaw)) return { ok: false, error: 'Unknown intake mode.' };
+
+  let patch: CohortIntakePatch;
+  if (modeRaw === 'sheet') {
+    const externalCohortId = normaliseExternalCohortId(String(formData.get('externalCohortId') ?? ''));
+    const tab = normaliseTabName(String(formData.get('intakeTabName') ?? ''));
+    const zone = String(formData.get('intakeTimezone') ?? '').trim() || cohort.timezone;
+    const problem = validateExternalCohortId(externalCohortId) ?? validateTabName(tab);
+    if (problem) return { ok: false, error: problem };
+    if (!isValidTimeZone(zone)) {
+      return { ok: false, error: `"${zone}" is not a timezone this system knows. Use an IANA name such as Asia/Kolkata or America/New_York.` };
+    }
+    patch = { intakeMode: 'sheet', externalCohortId, intakeTabName: tab, intakeTimezone: zone };
+  } else {
+    patch = { intakeMode: 'portal', externalCohortId: null, intakeTabName: null, intakeTimezone: null };
+  }
+
+  try {
+    const updated = await store.cohorts.updateCohortIntake(cohortId, patch);
+    await auditAdminAction({
+      action: 'cohort.intake_updated',
+      entityType: 'cohort',
+      entityId: cohortId,
+      cohortId,
+      before: {
+        intakeMode: cohort.intakeMode,
+        externalCohortId: cohort.externalCohortId,
+        intakeTabName: cohort.intakeTabName,
+        intakeTimezone: cohort.intakeTimezone,
+      },
+      after: {
+        intakeMode: updated.intakeMode,
+        externalCohortId: updated.externalCohortId,
+        intakeTabName: updated.intakeTabName,
+        intakeTimezone: updated.intakeTimezone,
+      },
+    });
+    revalidatePath('/admin/cohorts');
+    revalidatePath('/admin/intake');
+    return {
+      ok: true,
+      message:
+        updated.intakeMode === 'sheet'
+          ? `“${updated.name}” imports from tab “${updated.intakeTabName}” as ${updated.externalCohortId}.`
+          : `“${updated.name}” takes submissions through the Judge portal.`,
+    };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'Could not save the intake settings.' };
+  }
+}
+
 export async function setCohortStatusAction(formData: FormData): Promise<AdminActionResult> {
   await requireAdmin();
   await assertCsrf(String(formData.get('csrf') ?? ''));
@@ -246,7 +358,8 @@ export async function setCohortStatusAction(formData: FormData): Promise<AdminAc
   if (!cohort) return { ok: false, error: 'Cohort not found.' };
 
   const { canTransitionCohort } = await import('@ohj/shared');
-  const transition = canTransitionCohort(cohort.status, status);
+  // A sheet-fed cohort never opens the participant portal: draft → closed.
+  const transition = canTransitionCohort(cohort.status, status, { intakeMode: cohort.intakeMode });
   if (!transition.allowed) return { ok: false, error: transition.reason };
 
   await store.cohorts.setCohortStatus(cohortId, status);

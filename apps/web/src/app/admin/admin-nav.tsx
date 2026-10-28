@@ -4,6 +4,7 @@ import * as React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { StatusPill, Wordmark, cn } from '@/components/ui';
+import { cohortHref } from '@/lib/admin-cohort';
 import { logoutAction } from '@/server/admin-actions';
 
 /**
@@ -21,6 +22,9 @@ interface NavItem {
   match?: string[];
 }
 
+/** Sections that are about one cohort, and so keep the selected cohort in their link. */
+const SCOPED_SECTIONS = new Set(['/admin', '/admin/intake', '/admin/submissions', '/admin/assessment-queue', '/admin/ranking', '/admin/final-selection', '/admin/settings']);
+
 const NAV: NavItem[] = [
   { href: '/admin', label: 'Overview', icon: '◈' },
   { href: '/admin/cohorts', label: 'Cohorts', icon: '▦' },
@@ -37,11 +41,14 @@ export function AdminNav({
   username,
   cohortName,
   cohortStatus,
+  cohortId = null,
   demo,
 }: {
   username: string;
   cohortName: string | null;
   cohortStatus: string | null;
+  /** The cohort named in the URL; carried into every cohort-scoped section link. */
+  cohortId?: string | null;
   demo: boolean;
 }) {
   const pathname = usePathname() ?? '';
@@ -63,7 +70,7 @@ export function AdminNav({
         return (
           <li key={item.href}>
             <Link
-              href={item.href}
+              href={SCOPED_SECTIONS.has(item.href) ? cohortHref(item.href, cohortId) : item.href}
               aria-current={active ? 'page' : undefined}
               className={cn(
                 'flex items-center gap-3 rounded-[10px] px-3 py-2.5 text-sm font-medium transition-colors',

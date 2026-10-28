@@ -631,6 +631,12 @@ describe('assessment data', () => {
 });
 
 describe('queue claiming', () => {
+  beforeEach(async () => {
+    // Only a cohort whose judging has been started is claimable (ADR-035); the
+    // demo cohort is open for the learner journey.
+    await store.cohorts.setCohortStatus(DEMO_COHORT_ID, 'judging');
+  });
+
   it('leases jobs so two workers never claim the same one', async () => {
     // Re-queue an already-final submission: the fixture cohort's jobs are all
     // resolved, so there is nothing claimable until something is queued.

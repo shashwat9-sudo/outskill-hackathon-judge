@@ -6,6 +6,8 @@ import { Card, CardHeader, EmptyState, PageHeading, StatusPill } from '@/compone
 import { CreateCohortFlow } from './create-cohort-flow';
 import { LifecycleControls } from './lifecycle-controls';
 import { ClosureControls } from './closure-controls';
+import { IntakeSettings } from './intake-settings';
+import { cohortHref } from '@/lib/admin-cohort';
 
 export const dynamic = 'force-dynamic';
 
@@ -155,8 +157,9 @@ export default async function CohortsPage({
                   ['Ideas', `/admin/cohorts/${cohort.id}/ideas`],
                   ['Teams and invites', `/admin/cohorts/${cohort.id}/teams`],
                   ['Submissions', `/admin/cohorts/${cohort.id}/submissions`],
-                  ['Judging', '/admin/assessment-queue'],
-                  ['Results', '/admin/ranking'],
+                  ['Judging', cohortHref('/admin/assessment-queue', cohort.id)],
+                  ['Results', cohortHref('/admin/ranking', cohort.id)],
+                  ...(cohort.intakeMode === 'sheet' ? [['Sheet intake', cohortHref('/admin/intake', cohort.id)]] : []),
                 ].map(([label, href]) => (
                   <Link
                     key={href}
@@ -170,12 +173,36 @@ export default async function CohortsPage({
 
               <div className="mt-6 border-t border-line pt-5">
                 <CardHeader
+                  title="Intake"
+                  description={
+                    cohort.intakeMode === 'sheet'
+                      ? `Imports from the Google Sheet tab “${cohort.intakeTabName ?? 'not set'}” as ${cohort.externalCohortId ?? 'no external ID'}. Only this tab is ever read for this cohort.`
+                      : 'Teams submit through the Judge participant portal. Switch to sheet intake to import from a tab of the shared spreadsheet.'
+                  }
+                  level={3}
+                />
+                <IntakeSettings
+                  cohortId={cohort.id}
+                  csrfToken={session.csrfToken}
+                  initial={{
+                    intakeMode: cohort.intakeMode,
+                    externalCohortId: cohort.externalCohortId,
+                    intakeTabName: cohort.intakeTabName,
+                    intakeTimezone: cohort.intakeTimezone,
+                    timezone: cohort.timezone,
+                  }}
+                  locked={Boolean(cohort.externalCohortId) && finalCount > 0}
+                />
+              </div>
+              <div className="mt-6 border-t border-line pt-5">
+                <CardHeader
                   title="Lifecycle"
                   description="Each change affects what teams can do right now."
                   level={3}
                 />
                 <LifecycleControls
                   judgingAvailable={getCapabilities().assessment}
+                  intakeMode={cohort.intakeMode}
                   cohortId={cohort.id}
                   cohortName={cohort.name}
                   currentStatus={cohort.status}

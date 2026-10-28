@@ -1314,7 +1314,7 @@ export function teamResultsRow(row: SubmissionAuditRow): unknown[] {
 
 /** The team sheet: ranked rows first by rank, then the rest by group number. Same safety as the audit file. */
 export function buildTeamResultsCsv(rows: readonly SubmissionAuditRow[]): string {
-  return `﻿${toCsv([...TEAM_RESULTS_HEADERS], orderAuditRows(rows).map(teamResultsRow))}`;
+  return `\uFEFF${toCsv([...TEAM_RESULTS_HEADERS], orderAuditRows(rows).map(teamResultsRow))}`;
 }
 
 // --------------------------------------------------------------------------

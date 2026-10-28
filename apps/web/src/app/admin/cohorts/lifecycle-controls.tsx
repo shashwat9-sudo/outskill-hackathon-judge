@@ -33,6 +33,18 @@ interface Transition {
   viaArchiveAction?: boolean;
 }
 
+/**
+ * A sheet-fed cohort's only step before judging: submissions arrive by import,
+ * so the portal is never opened and "closed" is where "Start judging" becomes
+ * available. Importing is allowed in draft and closed alike.
+ */
+const SHEET_DRAFT_TO_CLOSED: Transition = {
+  status: 'closed',
+  label: 'Mark ready for judging',
+  effect: 'Closes the cohort for intake decisions; Start judging becomes available on the Judging page. Nothing is judged until you press it.',
+  tone: 'primary',
+};
+
 const TRANSITIONS: Record<string, Transition[]> = {
   draft: [
     {
@@ -178,8 +190,11 @@ export function LifecycleControls({
   finalSubmissionCount = 0,
   csrfToken,
   judgingAvailable = true,
+  intakeMode = 'portal',
 }: {
   cohortId: string;
+  /** A sheet-fed cohort never opens the portal: it goes from draft straight to closed. */
+  intakeMode?: 'portal' | 'sheet';
   /** Named in the archive confirmation, so nobody retires the wrong cohort. */
   cohortName: string;
   currentStatus: string;
@@ -194,9 +209,10 @@ export function LifecycleControls({
 
   // Hidden rather than shown-and-disabled: an operator should not be left
   // wondering whether they lack a permission. The page explains why elsewhere.
-  const transitions = (TRANSITIONS[currentStatus] ?? []).filter(
-    (t) => judgingAvailable || t.status !== 'judging',
-  );
+  const transitions = [
+    ...(intakeMode === 'sheet' && currentStatus === 'draft' ? [SHEET_DRAFT_TO_CLOSED] : []),
+    ...(TRANSITIONS[currentStatus] ?? []).filter((t) => !(intakeMode === 'sheet' && currentStatus === 'draft' && t.status === 'open')),
+  ].filter((t) => judgingAvailable || t.status !== 'judging');
 
   const run = async (transition: Transition) => {
     // Archiving is irreversible and its confirmation depends on what the cohort

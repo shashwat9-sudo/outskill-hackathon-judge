@@ -2,6 +2,8 @@ import Link from 'next/link';
 import { JUDGING_UNAVAILABLE_MESSAGE, ordinalPosition, storeCapabilities } from '@ohj/shared';
 import { getStoreAsync } from '@/lib/store';
 import { requireAdmin } from '@/server/admin-auth';
+import { selectAdminCohort } from '@/lib/admin-cohort';
+import { CohortSwitcher } from '@/components/cohort-switcher';
 import { clearFinalSelectionAction, setFinalSelectionAction } from '@/server/admin-actions';
 import { AdminForm } from '@/components/admin-form';
 import {
@@ -33,7 +35,11 @@ export const dynamic = 'force-dynamic';
  * before it. The page renders that number and says so in words; it never
  * assumes "four".
  */
-export default async function FinalistsPage() {
+export default async function FinalistsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ cohort?: string }>;
+}) {
   const session = await requireAdmin();
   const store = await getStoreAsync();
 
@@ -55,9 +61,12 @@ export default async function FinalistsPage() {
     );
   }
   const cohorts = await store.cohorts.listCohorts();
-  const cohort =
-    cohorts.find((c) => c.status === 'judging' || c.status === 'finalised') ?? cohorts[0];
+  const selection = selectAdminCohort(cohorts, (await searchParams).cohort, ['judging', 'finalised']);
+  const cohort = selection.cohort;
 
+  if (selection.notFound) {
+    return <EmptyState title="Cohort not found" description="No cohort has the id in this link. Open Cohorts and choose one." />;
+  }
   if (!cohort) return <EmptyState title="No cohorts yet" />;
 
   const [snapshot, selections] = await Promise.all([
@@ -72,6 +81,8 @@ export default async function FinalistsPage() {
 
   return (
     <div>
+      <CohortSwitcher path="/admin/final-selection" cohorts={cohorts} selectedId={cohort.id} explicit={selection.explicit} />
+
       <PageHeading
         title="Final selection"
         description={`Select exactly ${target} winner${target === 1 ? '' : 's'} for ${cohort.name}. The automated judge provides evidence and a private shortlist. The Outskill team makes the final decision.`}

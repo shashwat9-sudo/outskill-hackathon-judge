@@ -34,6 +34,7 @@ const SCHEMA_MIGRATIONS = [
   '0013_feedback_status',
   '0014_final_selection_target',
   '0015_worker_credential_reveal_stamp',
+  '0016_cohort_intake',
 ] as const;
 
 /**

@@ -1,5 +1,7 @@
 import { getEnvConfig, getStoreAsync, isDemo } from '@/lib/store';
 import { requireAdmin } from '@/server/admin-auth';
+import { selectAdminCohort } from '@/lib/admin-cohort';
+import { CohortSwitcher } from '@/components/cohort-switcher';
 import {
   rotateCredentialsAction,
   updateJudgingSettingsAction,
@@ -29,13 +31,18 @@ export const dynamic = 'force-dynamic';
  * the way in. Raw keys stay available under Advanced, where a developer can
  * find them without a programme operator having to read them.
  */
-export default async function SettingsPage() {
+export default async function SettingsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ cohort?: string }>;
+}) {
   const session = await requireAdmin();
   const store = await getStoreAsync();
   const env = getEnvConfig();
   const settings = await store.settings.getAll();
   const cohorts = await store.cohorts.listCohorts();
-  const cohort = cohorts.find((c) => c.status === 'judging' || c.status === 'open') ?? cohorts[0];
+  const selection = selectAdminCohort(cohorts, (await searchParams).cohort);
+  const cohort = selection.cohort ?? undefined;
 
   const config = cohort?.assessmentConfig;
   const browserMinutes = config ? Math.round(config.browserBudgetMs / 60_000) : 8;
@@ -46,6 +53,10 @@ export default async function SettingsPage() {
         title="Settings"
         description="Access, judging configuration, retention and system diagnostics."
       />
+
+      {cohorts.length > 0 && (
+        <CohortSwitcher path="/admin/settings" cohorts={cohorts} selectedId={cohort?.id ?? null} explicit={selection.explicit} />
+      )}
 
       {/* 1 — Admin access */}
       <Card className="mb-6">

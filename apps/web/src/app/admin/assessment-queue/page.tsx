@@ -9,6 +9,8 @@ import {
 import { describeProviderStatus } from '@ohj/ai';
 import { getCapabilities, getEnvConfig, getStoreAsync } from '@/lib/store';
 import { requireAdmin } from '@/server/admin-auth';
+import { selectAdminCohort } from '@/lib/admin-cohort';
+import { CohortSwitcher } from '@/components/cohort-switcher';
 import { retryMissingFeedbackAction, startJudgingAction } from '@/server/admin-actions';
 import { AdminForm } from '@/components/admin-form';
 import {
@@ -48,13 +50,21 @@ const PIPELINE: { label: string; stages: AssessmentStage[] }[] = [
   { label: 'Completed', stages: ['completed'] },
 ];
 
-export default async function JudgingPage() {
+export default async function JudgingPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ cohort?: string }>;
+}) {
   const session = await requireAdmin();
   const store = await getStoreAsync();
   const env = getEnvConfig();
   const cohorts = await store.cohorts.listCohorts();
-  const cohort = cohorts.find((c) => c.status === 'judging') ?? cohorts[0];
+  const selection = selectAdminCohort(cohorts, (await searchParams).cohort, ['judging']);
+  const cohort = selection.cohort;
 
+  if (selection.notFound) {
+    return <EmptyState title="Cohort not found" description="No cohort has the id in this link. Open Cohorts and choose one." />;
+  }
   if (!cohort) return <EmptyState title="No cohorts yet" />;
 
   // Every read below reaches the assessment repository. A deployment where it
@@ -132,6 +142,8 @@ export default async function JudgingPage() {
 
   return (
     <div>
+      <CohortSwitcher path="/admin/assessment-queue" cohorts={cohorts} selectedId={cohort.id} explicit={selection.explicit} />
+
       <PageHeading
         title="Judging progress"
         description="Track automated product testing, evidence review and cases that need human attention."

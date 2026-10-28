@@ -61,6 +61,9 @@ interface Options {
    */
   cohortId: string | null;
   bindExternalId: boolean;
+  /** With --bind-external-id: the sheet tab and timestamp zone to record on the cohort (0016). */
+  intakeTab: string | null;
+  intakeTimezone: string | null;
   apply: boolean;
   expectName: string | null;
   finalSelectionTarget: number | null;
@@ -77,7 +80,7 @@ function usage(message?: string): never {
     [
       'Usage:',
       '  npx tsx scripts/configure-cohort-ideas.ts --external-cohort-id <ID> [--apply]',
-      '      [--cohort-id <uuid> [--bind-external-id]]',
+      '      [--cohort-id <uuid> [--bind-external-id [--intake-tab <tab>] [--intake-timezone <zone>]]]',
       '      [--expect-name <text>] [--final-selection-target <n>] [--shortlist-target <n>]',
       '      [--prompt-version current] [--backup-dir <dir>]',
       '',
@@ -94,6 +97,8 @@ function parseArgs(argv: string[]): Options {
     externalCohortId: '',
     cohortId: null,
     bindExternalId: false,
+    intakeTab: null,
+    intakeTimezone: null,
     apply: false,
     expectName: null,
     finalSelectionTarget: null,
@@ -125,6 +130,14 @@ function parseArgs(argv: string[]): Options {
       }
       case '--bind-external-id':
         options.bindExternalId = true;
+        break;
+      case '--intake-tab':
+        options.intakeTab = takeValue(arg, i);
+        i += 1;
+        break;
+      case '--intake-timezone':
+        options.intakeTimezone = takeValue(arg, i);
+        i += 1;
         break;
       case '--expect-name':
         options.expectName = takeValue(arg, i);
@@ -292,7 +305,12 @@ async function identifyCohort(
  * moved off a cohort that has one. The unique index from migration 0010 is
  * the backstop for the same rule.
  */
-async function bindExternalId(db: SqlDatabase, cohort: CohortRow, externalCohortId: string): Promise<void> {
+async function bindExternalId(
+  db: SqlDatabase,
+  cohort: CohortRow,
+  externalCohortId: string,
+  intake: { tab: string | null; timezone: string | null } = { tab: null, timezone: null },
+): Promise<void> {
   const { rows: others } = await db.query<{ id: string; name: string }>(
     'select id, name from cohorts where external_cohort_id = $1 and id <> $2',
     [externalCohortId, cohort.id],
@@ -302,10 +320,25 @@ async function bindExternalId(db: SqlDatabase, cohort: CohortRow, externalCohort
       `"${externalCohortId}" is already mapped to cohort "${others[0]!.name}" (${others[0]!.id}). Refusing to bind a second cohort.`,
     );
   }
+  if (intake.tab) {
+    const { rows: tabOwners } = await db.query<{ id: string; name: string }>(
+      'select id, name from cohorts where lower(intake_tab_name) = lower($1) and id <> $2',
+      [intake.tab, cohort.id],
+    );
+    if (tabOwners.length > 0) {
+      throw new Error(`Tab "${intake.tab}" is already read by cohort "${tabOwners[0]!.name}" (${tabOwners[0]!.id}).`);
+    }
+  }
+  // A bound cohort is sheet-fed (0016); the tab and zone are recorded when given.
   const { rowCount } = await db.query(
-    `update cohorts set external_cohort_id = $2, updated_at = now()
+    `update cohorts
+        set external_cohort_id = $2,
+            intake_mode = 'sheet',
+            intake_tab_name = coalesce($3, intake_tab_name),
+            intake_timezone = coalesce($4, intake_timezone),
+            updated_at = now()
       where id = $1 and (external_cohort_id is null or external_cohort_id = $2)`,
-    [cohort.id, externalCohortId],
+    [cohort.id, externalCohortId, intake.tab, intake.timezone],
   );
   if (rowCount !== 1) throw new Error('The binding was not written; the cohort changed underneath this run.');
 }
@@ -523,7 +556,7 @@ async function main() {
     console.log('');
     console.log(`Applying to "${cohort.name}" (${cohort.id}) only…`);
     if (!cohort.external_cohort_id && options.bindExternalId) {
-      await bindExternalId(db, cohort, options.externalCohortId);
+      await bindExternalId(db, cohort, options.externalCohortId, { tab: options.intakeTab, timezone: options.intakeTimezone });
       done(`external id bound: ${options.externalCohortId}`);
     }
     if (ideaWork > 0) {

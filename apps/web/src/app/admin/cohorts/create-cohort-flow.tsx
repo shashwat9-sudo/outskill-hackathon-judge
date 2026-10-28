@@ -29,12 +29,20 @@ export function CreateCohortFlow({ csrfToken }: { csrfToken: string }) {
     day13DeadlineAt: '',
     shortlistTarget: '10',
     submissionInstructions: '',
+    intakeMode: 'portal',
+    externalCohortId: '',
+    intakeTabName: '',
+    intakeTimezone: 'Asia/Kolkata',
   });
 
   const set = (key: keyof typeof values, value: string) =>
     setValues((current) => ({ ...current, [key]: value }));
 
-  const basicsValid = values.name.trim().length > 0 && values.code.trim().length > 0;
+  const sheet = values.intakeMode === 'sheet';
+  const basicsValid =
+    values.name.trim().length > 0 &&
+    values.code.trim().length > 0 &&
+    (!sheet || (values.externalCohortId.trim().length > 0 && values.intakeTabName.trim().length > 0));
   const scheduleValid = values.day12StartAt !== '' && values.day13DeadlineAt !== '';
 
   const submit = async () => {
@@ -151,6 +159,71 @@ export function CreateCohortFlow({ csrfToken }: { csrfToken: string }) {
                   />
                 )}
               </Field>
+              <Field
+                id="cohort-intake-mode"
+                label="Where submissions come from"
+                hint="Sheet-fed cohorts can run side by side; each reads only its own tab."
+              >
+                {(aria) => (
+                  <select
+                    {...aria}
+                    data-testid="cohort-intake-mode"
+                    className="w-full rounded-[10px] border border-line bg-surface px-3 py-2 text-sm text-ink"
+                    value={values.intakeMode}
+                    onChange={(e) => set('intakeMode', e.target.value)}
+                  >
+                    <option value="portal">Judge participant portal</option>
+                    <option value="sheet">External Google Sheet intake</option>
+                  </select>
+                )}
+              </Field>
+              {sheet && (
+                <>
+                  <Field
+                    id="cohort-external-id"
+                    label="External cohort ID"
+                    required
+                    hint="Exactly as the intake will import it, e.g. AIAP-C15-IST. One cohort per ID."
+                  >
+                    {(aria) => (
+                      <Input
+                        {...aria}
+                        value={values.externalCohortId}
+                        onChange={(e) => set('externalCohortId', e.target.value)}
+                        placeholder="AIAP-C15-IST"
+                      />
+                    )}
+                  </Field>
+                  <Field
+                    id="cohort-intake-tab"
+                    label="Google Sheet tab"
+                    required
+                    hint="The tab in the shared spreadsheet this cohort reads. One tab per cohort."
+                  >
+                    {(aria) => (
+                      <Input
+                        {...aria}
+                        value={values.intakeTabName}
+                        onChange={(e) => set('intakeTabName', e.target.value)}
+                        placeholder="Submissions - AIAP C15 IST"
+                      />
+                    )}
+                  </Field>
+                  <Field
+                    id="cohort-intake-timezone"
+                    label="Sheet timestamps are in"
+                    hint="The spreadsheet's own timezone, e.g. Asia/Kolkata or America/New_York. Used to read Form timestamps."
+                  >
+                    {(aria) => (
+                      <Input
+                        {...aria}
+                        value={values.intakeTimezone}
+                        onChange={(e) => set('intakeTimezone', e.target.value)}
+                      />
+                    )}
+                  </Field>
+                </>
+              )}
             </>
           )}
 

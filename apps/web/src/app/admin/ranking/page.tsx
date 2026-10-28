@@ -8,6 +8,8 @@ import {
 } from '@ohj/shared';
 import { getStoreAsync } from '@/lib/store';
 import { requireAdmin } from '@/server/admin-auth';
+import { selectAdminCohort } from '@/lib/admin-cohort';
+import { CohortSwitcher } from '@/components/cohort-switcher';
 import {
   exportResultsFeedbackAction,
   exportShortlistAction,
@@ -44,7 +46,11 @@ export const dynamic = 'force-dynamic';
  * visually secondary. Deliberately no winner language anywhere on this page —
  * winners are chosen on the Finalists page, by a person.
  */
-export default async function ShortlistPage() {
+export default async function ShortlistPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ cohort?: string }>;
+}) {
   const session = await requireAdmin();
   const store = await getStoreAsync();
 
@@ -66,8 +72,12 @@ export default async function ShortlistPage() {
     );
   }
   const cohorts = await store.cohorts.listCohorts();
-  const cohort = cohorts.find((c) => c.status === 'judging') ?? cohorts[0];
+  const selection = selectAdminCohort(cohorts, (await searchParams).cohort, ['judging']);
+  const cohort = selection.cohort;
 
+  if (selection.notFound) {
+    return <EmptyState title="Cohort not found" description="No cohort has the id in this link. Open Cohorts and choose one." />;
+  }
   if (!cohort) return <EmptyState title="No cohorts yet" />;
 
   const [snapshot, snapshots, feedback, auditRows] = await Promise.all([
@@ -134,6 +144,8 @@ export default async function ShortlistPage() {
 
   return (
     <div>
+      <CohortSwitcher path="/admin/ranking" cohorts={cohorts} selectedId={cohort.id} explicit={selection.explicit} />
+
       <PageHeading
         title="Private shortlist"
         description="The strongest submissions by evidence-backed score, for internal review only."

@@ -227,11 +227,11 @@ export function buildPartnerStore(
           `insert into cohorts
              (name, code, external_cohort_id, day12_start_at, day13_deadline_at,
               shortlist_target, rubric_version_id, status, assessment_config,
-              final_selection_target)
+              final_selection_target, intake_mode)
            values ($1,$2,$3,
                    coalesce($4, now()),
                    coalesce($5, now() + interval '2 days'),
-                   coalesce($6::integer, $9::integer), $7, 'closed', $8::jsonb, $10::integer)
+                   coalesce($6::integer, $9::integer), $7, 'closed', $8::jsonb, $10::integer, 'sheet')
            returning id`,
           [
             input.name,

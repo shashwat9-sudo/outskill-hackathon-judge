@@ -2,13 +2,17 @@
 
 import { revalidatePath } from 'next/cache';
 import {
+  EXPECTED_SERVICE_ACCOUNT,
   checkGoogleConnectivity,
   csvSource,
   googleSheetsSource,
+  intakeTimezoneOf,
   readGoogleConfig,
+  readGoogleCredentials,
   syncSheet,
   REQUIRED_HEADERS,
   normaliseHeader,
+  type Cohort,
   type ConnectivitySummary,
   type SyncReport,
 } from '@ohj/shared';
@@ -16,25 +20,47 @@ import { getEnvConfig, getStoreAsync } from '@/lib/store';
 import { auditAdminAction, requireAdmin } from '@/server/admin-auth';
 
 /**
- * The three things an operator can do with the submissions sheet.
+ * The three things an operator can do with a cohort's submissions sheet.
  *
  * Every one of them runs behind the admin session — `requireAdmin` throws for
  * anyone else, so an unauthenticated caller cannot reach these even by posting
  * directly at the action endpoint.
+ *
+ * Every one of them is scoped to ONE cohort, named by the operator (0016). The
+ * cohort carries the tab it reads and the external id it imports under; the
+ * spreadsheet and the service account are shared server configuration. A
+ * second cohort's tab is never opened during another cohort's check or import,
+ * and switching the selection on screen reads nothing and writes nothing.
  *
  * Nothing here polls. On the day, learners keep editing the sheet until the
  * deadline; a loop reacting to every change would judge half-finished edits.
  * The operator decides when to look and when to import.
  */
 
+export interface IntakeCohortOption {
+  id: string;
+  name: string;
+  code: string;
+  status: Cohort['status'];
+  externalCohortId: string | null;
+  intakeTabName: string | null;
+}
+
 export interface IntakeConfig {
   configured: boolean;
+  cohortId: string | null;
+  cohortName: string | null;
+  cohortCode: string | null;
+  cohortStatus: string | null;
+  externalCohortId: string | null;
+  tabName: string | null;
+  /** The zone the sheet's timestamps are read in. */
+  intakeTimezone: string | null;
+  spreadsheetIdMasked: string | null;
   serviceAccountEmail: string | null;
   expectedServiceAccount: string;
-  externalCohortId: string | null;
-  cohortName: string | null;
-  tabName: string | null;
-  spreadsheetIdMasked: string | null;
+  /** Active, approved ideas on the cohort — an import needs at least one. */
+  approvedIdeas: number;
   /** What is still missing, in words an operator can act on. */
   missing: string[];
 }
@@ -42,27 +68,89 @@ export interface IntakeConfig {
 const mask = (id: string | undefined) =>
   !id ? null : id.length > 10 ? `${id.slice(0, 6)}…${id.slice(-4)}` : '…';
 
-/** Configuration as the page shows it. Never the private key. */
-export async function getIntakeConfig(): Promise<IntakeConfig> {
+/** Cohorts fed from the sheet, for the selector. Archived ones are not offered. */
+export async function listIntakeCohorts(): Promise<IntakeCohortOption[]> {
+  await requireAdmin();
+  const cohorts = await (await getStoreAsync()).cohorts.listCohorts();
+  return cohorts
+    .filter((c) => c.intakeMode === 'sheet' && c.status !== 'archived')
+    .map((c) => ({
+      id: c.id,
+      name: c.name,
+      code: c.code,
+      status: c.status,
+      externalCohortId: c.externalCohortId,
+      intakeTabName: c.intakeTabName,
+    }));
+}
+
+type Resolved = { ok: true; cohort: Cohort } | { ok: false; error: string };
+
+/** The selected cohort, validated server-side; never inferred from anything else. */
+async function resolveIntakeCohort(cohortId: string): Promise<Resolved> {
+  if (!cohortId) return { ok: false, error: 'Select a cohort first.' };
+  const cohort = await (await getStoreAsync()).cohorts.getCohort(cohortId);
+  if (!cohort) return { ok: false, error: 'That cohort does not exist.' };
+  if (cohort.intakeMode !== 'sheet') {
+    return { ok: false, error: `Cohort "${cohort.name}" takes submissions through the Judge portal, not from a sheet.` };
+  }
+  if (!cohort.externalCohortId) {
+    return { ok: false, error: `Cohort "${cohort.name}" has no external cohort ID. Set it under Cohorts → Intake settings.` };
+  }
+  if (!cohort.intakeTabName) {
+    return { ok: false, error: `Cohort "${cohort.name}" has no Google Sheet tab. Set it under Cohorts → Intake settings.` };
+  }
+  return { ok: true, cohort };
+}
+
+/** Configuration as the page shows it, for one cohort. Never the private key. */
+export async function getIntakeConfig(cohortId: string | null): Promise<IntakeConfig> {
   await requireAdmin();
   const env = getEnvConfig();
-  const google = readGoogleConfig(env as unknown as Record<string, string | undefined>);
-
+  const credentials = readGoogleCredentials(env as unknown as Record<string, string | undefined>);
   const missing: string[] = [];
   if (!env.GOOGLE_SERVICE_ACCOUNT_EMAIL) missing.push('Google service-account email');
   if (!env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY) missing.push('Google service-account key');
   if (!env.GOOGLE_SHEETS_SPREADSHEET_ID) missing.push('Spreadsheet ID');
-  if (!env.GOOGLE_SHEETS_TAB_NAME) missing.push('Sheet tab name');
-  if (!env.GOOGLE_SHEETS_EXTERNAL_COHORT_ID) missing.push('Cohort ID');
+
+  const base: IntakeConfig = {
+    configured: false,
+    cohortId: null,
+    cohortName: null,
+    cohortCode: null,
+    cohortStatus: null,
+    externalCohortId: null,
+    tabName: null,
+    intakeTimezone: null,
+    spreadsheetIdMasked: mask(env.GOOGLE_SHEETS_SPREADSHEET_ID),
+    serviceAccountEmail: env.GOOGLE_SERVICE_ACCOUNT_EMAIL ?? null,
+    expectedServiceAccount: EXPECTED_SERVICE_ACCOUNT,
+    approvedIdeas: 0,
+    missing,
+  };
+  if (!cohortId) return { ...base, missing: [...missing, 'A selected cohort'] };
+
+  const store = await getStoreAsync();
+  const cohort = await store.cohorts.getCohort(cohortId);
+  if (!cohort) return { ...base, missing: [...missing, 'A cohort that exists'] };
+  if (cohort.intakeMode !== 'sheet') missing.push('Intake mode set to "External Google Sheet intake"');
+  if (!cohort.externalCohortId) missing.push('External cohort ID on the cohort');
+  if (!cohort.intakeTabName) missing.push('Google Sheet tab on the cohort');
+  const ideas = await store.cohorts.listIdeas(cohort.id);
+  const approvedIdeas = ideas.filter((i) => i.isActive && i.definitionStatus === 'approved').length;
+  if (approvedIdeas === 0) missing.push('At least one approved idea on the cohort (needed to import)');
 
   return {
-    configured: google !== null && Boolean(env.GOOGLE_SHEETS_EXTERNAL_COHORT_ID),
-    serviceAccountEmail: env.GOOGLE_SERVICE_ACCOUNT_EMAIL ?? null,
-    expectedServiceAccount: 'outskill-hackathon-judge@outskill-hackathon-judge.iam.gserviceaccount.com',
-    externalCohortId: env.GOOGLE_SHEETS_EXTERNAL_COHORT_ID ?? null,
-    cohortName: env.GOOGLE_SHEETS_COHORT_NAME ?? env.GOOGLE_SHEETS_EXTERNAL_COHORT_ID ?? null,
-    tabName: env.GOOGLE_SHEETS_TAB_NAME ?? null,
-    spreadsheetIdMasked: mask(env.GOOGLE_SHEETS_SPREADSHEET_ID),
+    ...base,
+    configured: credentials !== null && cohort.intakeMode === 'sheet' && Boolean(cohort.externalCohortId && cohort.intakeTabName),
+    cohortId: cohort.id,
+    cohortName: cohort.name,
+    cohortCode: cohort.code,
+    cohortStatus: cohort.status,
+    externalCohortId: cohort.externalCohortId,
+    tabName: cohort.intakeTabName,
+    intakeTimezone: intakeTimezoneOf(cohort),
+    approvedIdeas,
     missing,
   };
 }
@@ -73,26 +161,26 @@ export interface ConnectionResult extends ConnectivitySummary {
 }
 
 /**
- * Can we reach the sheet at all?
+ * Can we reach the cohort's tab at all?
  *
  * Reads header names and a row count and nothing else — no cell values, so no
  * password and no learner record can surface here. Creates nothing: no
- * submission, no job, no AI call, no worker.
+ * submission, no job, no AI call, no worker. An empty tab is a valid answer.
  */
-export async function testConnectionAction(): Promise<ConnectionResult | { error: string }> {
+export async function testConnectionAction(cohortId: string): Promise<ConnectionResult | { error: string }> {
   await requireAdmin();
+  const resolved = await resolveIntakeCohort(cohortId);
+  if (!resolved.ok) return { error: resolved.error };
   const env = getEnvConfig();
-  const config = readGoogleConfig(env as unknown as Record<string, string | undefined>);
+  const config = readGoogleConfig(env as unknown as Record<string, string | undefined>, resolved.cohort.intakeTabName);
   if (!config) {
-    return { error: 'Google Sheets is not configured yet. See the configuration panel above.' };
+    return { error: 'Google Sheets is not configured on the server yet. See the configuration panel above.' };
   }
-
   const summary = await checkGoogleConnectivity(config);
   const present = summary.headers.map(normaliseHeader);
   const missingHeaders = summary.ok
     ? REQUIRED_HEADERS.filter((h) => !present.includes(normaliseHeader(h)))
     : [];
-
   return { ...summary, missingHeaders: [...missingHeaders], checkedAt: new Date().toISOString() };
 }
 
@@ -103,54 +191,54 @@ export interface IntakeRunResult {
 }
 
 /**
- * Read and validate the sheet, writing nothing.
+ * Read and validate the cohort's tab, writing nothing.
  *
  * Safe to run during the submission window, as often as the operator likes.
  */
-export async function dryRunAction(csv?: string): Promise<IntakeRunResult> {
-  return runIntake({ dryRun: true, csv });
+export async function dryRunAction(cohortId: string, csv?: string): Promise<IntakeRunResult> {
+  return runIntake({ cohortId, dryRun: true, csv });
 }
 
 /**
- * Import the validated submissions and queue judging jobs.
+ * Import the validated submissions into the selected cohort and queue their
+ * judging jobs.
  *
- * `expectedFingerprint` is what the operator was shown at dry run. The sheet is
- * read and parsed again here, and a mismatch refuses the import — otherwise a
- * dry run showing 118 submissions could be followed by a sync importing
- * something else, and nobody would know until the scores came out.
+ * `expectedFingerprint` is what the operator was shown at dry run. It is bound
+ * to the spreadsheet, the tab, the cohort and the rows, so a check of one
+ * cohort's tab can never authorise another cohort's import, and a sheet
+ * edited since the check is refused. Queued jobs are not judged until the
+ * operator starts judging for this cohort (ADR-035).
  */
 export async function syncAction(
+  cohortId: string,
   expectedFingerprint: string,
   csv?: string,
 ): Promise<IntakeRunResult> {
-  return runIntake({ dryRun: false, expectedFingerprint, csv });
+  if (!expectedFingerprint) {
+    return { ranAt: new Date().toISOString(), error: 'Check the sheet first, then import what the check showed.' };
+  }
+  return runIntake({ cohortId, dryRun: false, expectedFingerprint, csv });
 }
 
 async function runIntake(input: {
+  cohortId: string;
   dryRun: boolean;
   expectedFingerprint?: string;
   csv?: string;
 }): Promise<IntakeRunResult> {
   await requireAdmin();
   const ranAt = new Date().toISOString();
+  const resolved = await resolveIntakeCohort(input.cohortId);
+  if (!resolved.ok) return { ranAt, error: resolved.error };
+  const { cohort } = resolved;
   const env = getEnvConfig();
-  const externalCohortId = env.GOOGLE_SHEETS_EXTERNAL_COHORT_ID ?? '';
-  const cohortName = env.GOOGLE_SHEETS_COHORT_NAME ?? externalCohortId;
-
-  if (!externalCohortId) {
-    return {
-      ranAt,
-      error:
-        'No cohort is configured for this sheet. Set the cohort ID before importing — intake will not guess it.',
-    };
-  }
 
   let source;
   if (input.csv) {
-    source = csvSource(input.csv, 'manual-upload.csv');
+    source = csvSource(input.csv, `manual-upload (${cohort.code}).csv`);
   } else {
-    const config = readGoogleConfig(env as unknown as Record<string, string | undefined>);
-    if (!config) return { ranAt, error: 'Google Sheets is not configured yet.' };
+    const config = readGoogleConfig(env as unknown as Record<string, string | undefined>, cohort.intakeTabName);
+    if (!config) return { ranAt, error: 'Google Sheets is not configured on the server yet.' };
     source = googleSheetsSource(config);
   }
 
@@ -158,8 +246,10 @@ async function runIntake(input: {
   const report = await syncSheet({
     store,
     source,
-    externalCohortId,
-    cohortName,
+    cohortId: cohort.id,
+    externalCohortId: cohort.externalCohortId ?? '',
+    cohortName: cohort.name,
+    sourceTimezone: intakeTimezoneOf(cohort),
     dryRun: input.dryRun,
     ...(input.expectedFingerprint ? { expectedFingerprint: input.expectedFingerprint } : {}),
   });
@@ -170,10 +260,11 @@ async function runIntake(input: {
     await auditAdminAction({
       action: 'intake.sheet_synced',
       entityType: 'cohort',
-      entityId: report.judgeCohortId,
-      cohortId: report.judgeCohortId,
+      entityId: cohort.id,
+      cohortId: cohort.id,
       after: {
         externalCohortId: report.externalCohortId,
+        tabName: report.tabName,
         newSubmissions: report.newSubmissions,
         alreadyIngested: report.alreadyIngested,
         invalidRows: report.invalidRows,

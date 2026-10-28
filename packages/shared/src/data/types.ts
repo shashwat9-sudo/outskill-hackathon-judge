@@ -88,6 +88,15 @@ export interface Cohort {
    * ranking separately.
    */
   externalCohortId: string | null;
+  /**
+   * Where submissions come from: the Judge's own portal, or a Google Sheet tab
+   * named on the cohort. Sheet cohorts may run side by side (0016).
+   */
+  intakeMode: 'portal' | 'sheet';
+  /** The sheet tab this cohort imports from; null for portal cohorts. */
+  intakeTabName: string | null;
+  /** IANA zone the sheet's timestamps are written in; null means `timezone`. */
+  intakeTimezone: string | null;
   finalisedAt: Date | null;
   /** When submissions actually stopped being accepted. */
   closedAt: Date | null;

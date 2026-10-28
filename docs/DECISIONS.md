@@ -317,3 +317,19 @@ The "why" columns follow three rules, in code (`packages/shared/src/domain/submi
 The export never re-judges anything, and the row type has nowhere to carry a credential, ciphertext, evidence path or prompt; free text from system records is additionally passed through a redaction step before it becomes a cell.
 
 **Cost:** a second export to explain, and a derivation that can only be as specific as the records are. Where the job records only "failed", the failing stage is inferred from which stage records exist and the row says so — which is the honest answer, and better than a stage column that reads as fact.
+
+---
+
+### ADR-035 — Cohort selection is the only routing input; judging starts by hand, per cohort
+
+Two cohorts now run from two tabs of one spreadsheet (AIAP C15 IST and EST). Until now the sheet intake was three environment variables — one tab, one external cohort id, one name — so the Judge could ingest one cohort at a time and switching meant a redeploy; the worker claimed any queued job, so importing a cohort was starting its judging; and every admin page picked "the first cohort that is judging", which with two of them is a guess.
+
+**Decision.** The cohort carries its intake (`intake_mode`, `intake_tab_name`, `intake_timezone`, migration 0016) next to its `external_cohort_id`, each unique. Every intake action takes the cohort id the operator selected, reads that cohort's tab only, and refuses — never guesses — when the tab's external id maps elsewhere or the cohort has no approved ideas; it never creates a cohort. The dry-run fingerprint is bound to spreadsheet, tab, cohort and rows, so a check of one tab cannot authorise an import into another cohort. Sheet timestamps are read in the cohort's configured IANA zone, never the server's.
+
+**Judging is gated in the queue, not the UI.** The worker's claim query (both drivers) takes only jobs whose cohort is in status `judging`, which only the operator's Start judging sets. Import queues; it does not judge. Two judging cohorts share the worker and its capacity; neither can touch the other's jobs, scores, ranking or winners, which were already cohort-scoped.
+
+**Lifecycle.** A sheet-fed cohort never opens the participant portal: it goes draft → closed → judging. Portal cohorts keep the one-open-cohort exclusivity exactly as before.
+
+**Admin pages.** Every cohort-scoped page takes `?cohort=<id>`, validates it on the server, shows a switcher, and passes that id into every action; an unknown id is "not found", never a fallback. Without one, the page defaults to the single judging or open cohort and says so.
+
+**Cost.** One more thing to set per cohort (its tab), done once in the admin UI; and a queue that will not run a cohort an operator forgot to start — which is the behaviour asked for.

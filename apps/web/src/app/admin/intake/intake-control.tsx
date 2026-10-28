@@ -40,7 +40,27 @@ import {
 
 type Phase = 'idle' | 'testing' | 'dry-running' | 'syncing';
 
-export function IntakeControl({ config }: { config: IntakeConfig }) {
+export interface IntakeLinks {
+  submissions: string;
+  judging: string;
+  ranking: string;
+  cohorts: string;
+}
+
+export function IntakeControl({
+  config,
+  links = {
+    submissions: '/admin/submissions',
+    judging: '/admin/assessment-queue',
+    ranking: '/admin/ranking',
+    cohorts: '/admin/cohorts',
+  },
+}: {
+  /** The selected cohort's configuration. Every action below acts on it alone. */
+  config: IntakeConfig;
+  links?: IntakeLinks;
+}) {
+  const cohortId = config.cohortId ?? '';
   const [phase, setPhase] = React.useState<Phase>('idle');
   const [connection, setConnection] = React.useState<ConnectionResult | { error: string } | null>(null);
   const [dryRun, setDryRun] = React.useState<IntakeRunResult | null>(null);
@@ -63,7 +83,7 @@ export function IntakeControl({ config }: { config: IntakeConfig }) {
 
   async function onTest() {
     setPhase('testing');
-    setConnection(await testConnectionAction());
+    setConnection(await testConnectionAction(cohortId));
     setPhase('idle');
   }
 
@@ -71,7 +91,7 @@ export function IntakeControl({ config }: { config: IntakeConfig }) {
     setPhase('dry-running');
     setSyncResult(null);
     setConfirming(false);
-    setDryRun(await dryRunAction());
+    setDryRun(await dryRunAction(cohortId));
     setPhase('idle');
   }
 
@@ -79,9 +99,9 @@ export function IntakeControl({ config }: { config: IntakeConfig }) {
     if (!report) return;
     setPhase('syncing');
     setConfirming(false);
-    // The fingerprint the operator was shown. The server re-reads the sheet and
-    // refuses if it no longer matches.
-    setSyncResult(await syncAction(report.fingerprint));
+    // The fingerprint the operator was shown — bound to this cohort and its
+    // tab. The server re-reads the sheet and refuses if it no longer matches.
+    setSyncResult(await syncAction(cohortId, report.fingerprint));
     setPhase('idle');
   }
 
@@ -91,24 +111,40 @@ export function IntakeControl({ config }: { config: IntakeConfig }) {
       {/* Configuration                                                     */}
       {/* ---------------------------------------------------------------- */}
       <Card>
-        <CardHeader title="Connection settings" description="Configured on the server. Nothing here can be edited from this page." />
+        <CardHeader
+          title="Intake source for this cohort"
+          description="The tab and external cohort ID come from the cohort's intake settings; the spreadsheet and service account are shared by every cohort and configured on the server."
+        />
 
         {config.missing.length > 0 && (
-          <Alert tone="warning" title="Not fully configured yet">
-            Still needed: {config.missing.join(', ')}. Ask whoever manages the deployment to add
-            these before the hackathon.
+          <Alert tone="warning" title="Not fully configured yet" testId="intake-missing">
+            Still needed: {config.missing.join(', ')}. Cohort settings are under{' '}
+            <Link href={links.cohorts} className="underline">
+              Cohorts
+            </Link>
+            ; server settings belong to whoever manages the deployment.
           </Alert>
         )}
 
         <DescriptionList
           items={[
-            { term: 'Cohort', description: config.cohortName ?? 'Not set' },
-            { term: 'Cohort ID', description: config.externalCohortId ?? 'Not set' },
+            {
+              term: 'Cohort',
+              description: config.cohortName
+                ? `${config.cohortName} (${config.cohortCode ?? ''}) · ${config.cohortStatus ?? ''}`
+                : 'Not selected',
+            },
+            { term: 'External cohort ID', description: config.externalCohortId ?? 'Not set' },
             { term: 'Sheet tab', description: config.tabName ?? 'Not set' },
+            { term: 'Sheet timestamps read in', description: config.intakeTimezone ?? 'Not set' },
             { term: 'Spreadsheet', description: config.spreadsheetIdMasked ?? 'Not set' },
             {
               term: 'Reading as',
               description: config.serviceAccountEmail ?? 'Not set',
+            },
+            {
+              term: 'Approved ideas on this cohort',
+              description: String(config.approvedIdeas),
             },
           ]}
         />
@@ -122,7 +158,7 @@ export function IntakeControl({ config }: { config: IntakeConfig }) {
           title="1. Test connection"
           description="Checks that we can open the sheet and that the expected columns are there. Changes nothing."
         />
-        <Button onClick={onTest} disabled={busy} variant="secondary">
+        <Button onClick={onTest} disabled={busy || !config.cohortId} variant="secondary">
           {phase === 'testing' ? 'Checking…' : 'Test connection'}
         </Button>
 
@@ -267,9 +303,10 @@ export function IntakeControl({ config }: { config: IntakeConfig }) {
           <div className="rounded-lg border border-warning/40 bg-warning/5 p-4">
             <h3 className="text-base font-semibold">Import final submissions?</h3>
             <p className="mt-2 text-sm text-muted">
-              This will import {ready} validated submission{ready === 1 ? '' : 's'} into the Judge
-              for <strong>{config.cohortName}</strong> and queue{' '}
-              {ready === 1 ? 'a judging job' : `${ready} judging jobs`}.
+              This will import {ready} validated submission{ready === 1 ? '' : 's'} from tab “
+              {config.tabName}” into the Judge cohort <strong>{config.cohortName}</strong> and queue{' '}
+              {ready === 1 ? 'a judging job' : `${ready} judging jobs`}. Nothing is judged until you
+              press Start judging for this cohort.
             </p>
             {blocked > 0 && (
               <p className="mt-2 text-sm text-muted">
@@ -320,17 +357,18 @@ export function IntakeControl({ config }: { config: IntakeConfig }) {
             </Alert>
 
             <Alert tone="info" title="Judging has not started yet">
-              Submissions have been queued. The judging worker must be online to process them.
+              Submissions for {config.cohortName} have been queued. They are not judged until you press
+              “Start judging” for this cohort on the Judging page — importing never starts judging.
             </Alert>
 
             <div className="flex flex-wrap gap-3">
-              <Link href="/admin/submissions">
+              <Link href={links.submissions}>
                 <Button variant="secondary">View submissions</Button>
               </Link>
-              <Link href="/admin/assessment-queue">
+              <Link href={links.judging}>
                 <Button variant="secondary">View judging status</Button>
               </Link>
-              <Link href="/admin/ranking">
+              <Link href={links.ranking}>
                 <Button variant="secondary">View shortlist</Button>
               </Link>
             </div>

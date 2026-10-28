@@ -125,6 +125,9 @@ export const DEMO_COHORT = {
   // Open, so the learner journey is fully explorable in demo mode. Assessment
   // fixtures are pre-seeded regardless of status so the admin side is populated.
   status: 'open' as const,
+  intakeMode: 'portal' as const,
+  intakeTabName: null,
+  intakeTimezone: null,
   finalisedAt: null,
   createdAt: DEMO_DAY12_START,
   updatedAt: DEMO_NOW,

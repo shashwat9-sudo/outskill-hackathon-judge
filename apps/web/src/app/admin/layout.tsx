@@ -4,7 +4,8 @@ import { getAdminSession } from '@/server/admin-auth';
 import { logoutAction } from '@/server/admin-actions';
 import { getStoreAsync, isDemo } from '@/lib/store';
 import { cohortIdFromPath } from '@/lib/cohort-context';
-import { PATHNAME_HEADER } from '@/middleware';
+import { PATHNAME_HEADER, SEARCH_HEADER } from '@/middleware';
+import { cohortIdFromSearch, selectAdminCohort } from '@/lib/admin-cohort';
 import { StatusPill } from '@/components/ui';
 import { AdminNav } from './admin-nav';
 
@@ -32,17 +33,19 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   // globally active cohort" there would put one cohort's name above another
   // cohort's controls — and every control on the page acts on the one in the
   // URL, so the header would be inviting changes to the wrong cohort.
-  const scopedId = cohortIdFromPath((await headers()).get(PATHNAME_HEADER));
+  const requestHeaders = await headers();
+  const scopedId =
+    cohortIdFromPath(requestHeaders.get(PATHNAME_HEADER)) ??
+    // `?cohort=<id>` names the cohort on every cohort-scoped admin page (0016).
+    cohortIdFromSearch(requestHeaders.get(SEARCH_HEADER));
   const scopedCohort = scopedId ? cohorts.find((c) => c.id === scopedId) : undefined;
 
   // Only pages that are not about one particular cohort fall back — the
   // overview, the cohort list, settings. There is no specific cohort there to
-  // be wrong about.
+  // be wrong about, and the page itself shows the switcher with its default.
   const activeCohort =
     scopedCohort ??
-    (scopedId
-      ? undefined
-      : (cohorts.find((c) => c.status === 'judging' || c.status === 'open') ?? cohorts[0]));
+    (scopedId ? undefined : selectAdminCohort(cohorts, null).cohort ?? undefined);
 
   return (
     <div className="min-h-screen bg-canvas lg:flex">
@@ -50,6 +53,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
         username={session.username}
         cohortName={activeCohort?.name ?? null}
         cohortStatus={activeCohort?.status ?? null}
+        cohortId={scopedCohort?.id ?? null}
         demo={isDemo()}
       />
 

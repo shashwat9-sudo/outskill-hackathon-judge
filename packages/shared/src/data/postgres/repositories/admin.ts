@@ -213,6 +213,62 @@ export function buildCohortStore(db: SqlDatabase): CohortStore {
       return rows.length > 0 ? mapCohort(rows[0] as Record<string, unknown>) : null;
     },
 
+    async getCohortByExternalId(externalCohortId) {
+      const id = externalCohortId.trim();
+      if (!id) return null;
+      const { rows } = await db.query(`${COHORT_SELECT} where c.external_cohort_id = $1`, [id]);
+      return rows.length ? mapCohort(rows[0] as Record<string, unknown>) : null;
+    },
+
+    async updateCohortIntake(id, intake) {
+      return db.transaction(async (tx) => {
+        const { rows: current } = await tx.query<{ external_cohort_id: string | null; imported: string }>(
+          `select c.external_cohort_id,
+                  (select count(*) from submissions s where s.cohort_id = c.id and s.external_submission_id is not null)::text as imported
+             from cohorts c where c.id = $1`,
+          [id],
+        );
+        if (!current[0]) throw new RowNotFoundError('Cohort', id);
+        const externalCohortId = intake.intakeMode === 'sheet' ? intake.externalCohortId : null;
+        const tabName = intake.intakeMode === 'sheet' ? intake.intakeTabName : null;
+        if (
+          current[0].external_cohort_id &&
+          externalCohortId !== current[0].external_cohort_id &&
+          Number(current[0].imported) > 0
+        ) {
+          throw new Error(
+            'This cohort already holds imported submissions under its external cohort ID; the ID cannot be changed.',
+          );
+        }
+        if (externalCohortId) {
+          const { rows: clash } = await tx.query<{ name: string }>(
+            'select name from cohorts where external_cohort_id = $1 and id <> $2',
+            [externalCohortId, id],
+          );
+          if (clash[0]) throw new Error(`External cohort ID "${externalCohortId}" is already used by cohort "${clash[0].name}".`);
+        }
+        if (tabName) {
+          const { rows: clash } = await tx.query<{ name: string }>(
+            'select name from cohorts where lower(intake_tab_name) = lower($1) and id <> $2',
+            [tabName, id],
+          );
+          if (clash[0]) throw new Error(`Sheet tab "${tabName}" is already read by cohort "${clash[0].name}".`);
+        }
+        await tx.query(
+          `update cohorts
+              set intake_mode = $2,
+                  external_cohort_id = $3,
+                  intake_tab_name = $4,
+                  intake_timezone = $5,
+                  updated_at = now()
+            where id = $1`,
+          [id, intake.intakeMode, externalCohortId, tabName, intake.intakeMode === 'sheet' ? intake.intakeTimezone : null],
+        );
+        const { rows } = await tx.query(`${COHORT_SELECT} where c.id = $1`, [id]);
+        return mapCohort(rows[0] as Record<string, unknown>);
+      });
+    },
+
     async findActiveCohort() {
       // Learner-facing cohorts first, and only if there is exactly ONE. Picking
       // between two by creation order is what produced the original bug: the
@@ -258,8 +314,8 @@ export function buildCohortStore(db: SqlDatabase): CohortStore {
              (name, code, description, timezone, day12_start_at, day13_deadline_at,
               shortlist_target, submission_instructions, rubric_version_id,
               assessment_config, status, closed_at, closure_type, accepting_until,
-              final_selection_target)
-           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+              final_selection_target, intake_mode)
+           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
            returning *`,
           [
             input.name,
@@ -278,6 +334,7 @@ export function buildCohortStore(db: SqlDatabase): CohortStore {
             input.acceptingUntil,
             // The historical four unless the caller says otherwise (0014).
             input.finalSelectionTarget ?? DEFAULT_FINAL_SELECTION_TARGET,
+            input.intakeMode ?? 'portal',
           ],
         );
         const created = mapRow<Cohort & { rubricVersionId?: string }>(
@@ -307,8 +364,12 @@ export function buildCohortStore(db: SqlDatabase): CohortStore {
        */
       delete (writable as Record<string, unknown>).isSynthetic;
       // Same reasoning: the external mapping decides which ranking a whole
-      // cohort competes in, and is set only by the partner sync path.
+      // cohort competes in, and is set only by `updateCohortIntake` (which
+      // checks uniqueness) or the partner sync path.
       delete (writable as Record<string, unknown>).externalCohortId;
+      delete (writable as Record<string, unknown>).intakeMode;
+      delete (writable as Record<string, unknown>).intakeTabName;
+      delete (writable as Record<string, unknown>).intakeTimezone;
       delete (writable as Record<string, unknown>).id;
       delete (writable as Record<string, unknown>).createdAt;
       delete (writable as Record<string, unknown>).updatedAt;

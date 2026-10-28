@@ -229,15 +229,26 @@ async function main() {
     // --- Sheet (optional, read-only) ------------------------------------------
     if (options.sheetDryRun) {
       console.log('\nGoogle Sheet dry run (read-only)');
-      const config = readGoogleConfig(env);
+      // The cohort's own tab (0016) decides what is read; the single-tab
+      // environment variable is only a fallback for a cohort configured before it.
+      const tabFromCohort = cohort?.intakeTabName ?? null;
+      const config = readGoogleConfig(env, tabFromCohort);
       if (!config) {
-        bad('Google Sheets is not configured in the environment');
+        bad(
+          tabFromCohort
+            ? 'Google Sheets credentials are not configured in the environment'
+            : 'no intake tab on the cohort and GOOGLE_SHEETS_TAB_NAME is unset',
+        );
         blockers.push('sheet config');
       } else {
-        const externalFromEnv = env.GOOGLE_SHEETS_EXTERNAL_COHORT_ID;
-        if (externalFromEnv !== options.externalCohortId) {
-          bad(`GOOGLE_SHEETS_EXTERNAL_COHORT_ID is ${externalFromEnv ?? 'unset'}, not ${options.externalCohortId}`);
-          blockers.push('sheet cohort id');
+        if (tabFromCohort) {
+          ok(`tab "${tabFromCohort}" comes from the cohort's intake settings (external id ${cohort?.externalCohortId})`);
+        } else {
+          const externalFromEnv = env.GOOGLE_SHEETS_EXTERNAL_COHORT_ID;
+          if (externalFromEnv !== options.externalCohortId) {
+            bad(`GOOGLE_SHEETS_EXTERNAL_COHORT_ID is ${externalFromEnv ?? 'unset'}, not ${options.externalCohortId}`);
+            blockers.push('sheet cohort id');
+          }
         }
         const connectivity = await checkGoogleConnectivity(config);
         if (!connectivity.ok) {
@@ -249,7 +260,8 @@ async function main() {
             store,
             source: googleSheetsSource(config),
             externalCohortId: options.externalCohortId,
-            cohortName: env.GOOGLE_SHEETS_COHORT_NAME ?? options.externalCohortId,
+            cohortName: cohort?.name ?? env.GOOGLE_SHEETS_COHORT_NAME ?? options.externalCohortId,
+            ...(cohort ? { cohortId: cohort.id, sourceTimezone: cohort.intakeTimezone ?? cohort.timezone } : {}),
             dryRun: true,
           });
           if (report.fatalError) {
