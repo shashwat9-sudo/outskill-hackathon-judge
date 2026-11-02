@@ -1,7 +1,7 @@
 /**
  * One real OpenAI call, and nothing else.
  *
- * Run before switching the production provider, to answer the only question a
+ * Run before switching the production model, to answer the only question a
  * unit test cannot: does this key, in this project, reach this model, over the
  * Responses API, and come back as something the pipeline would accept.
  *
@@ -13,16 +13,30 @@
  *
  * It prints metadata only. Not the key, not the prompt, not the response body.
  *
- *   railway run --service judging-worker npx tsx scripts/openai-smoke.ts
+ *   OPENAI_API_KEY=… npx tsx scripts/openai-smoke.ts --model gpt-6.1-sol
+ *   railway run --service <live worker> npx tsx scripts/openai-smoke.ts
  *
- * The key arrives from the Railway environment. It is never read from a file,
- * never echoed, and never written anywhere by this script.
+ * The model is `--model`, else `AI_MODEL`, else the current production
+ * default below. The key is `OPENAI_API_KEY` and nothing else: `AI_API_KEY`
+ * holds another provider's credential on the worker and is never sent to
+ * OpenAI (see `providerApiKey` in the shared config).
  */
 
 import { z } from 'zod';
 import { createAiClient, AiError } from '../packages/ai/src/provider';
 
-const MODEL = 'gpt-5.6-terra';
+/** The model the production worker is being moved to. Overridable, never silently defaulted elsewhere. */
+export const DEFAULT_SMOKE_MODEL = 'gpt-6.1-sol';
+
+/** `--model name` or `--model=name`, then AI_MODEL, then the default. */
+export function resolveSmokeModel(argv: readonly string[], env: Record<string, string | undefined>): string {
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i]!;
+    if (arg === '--model' && argv[i + 1]) return argv[i + 1]!.trim();
+    if (arg.startsWith('--model=')) return arg.slice('--model='.length).trim();
+  }
+  return env.AI_MODEL?.trim() || DEFAULT_SMOKE_MODEL;
+}
 
 /**
  * Small, but the same shape of thing judging asks for: an enum, a bounded
@@ -37,27 +51,31 @@ const smokeSchema = z.object({
 });
 
 async function main() {
+  const model = resolveSmokeModel(process.argv.slice(2), process.env);
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     console.error(
       'OPENAI_API_KEY is not present in this environment. ' +
-        'Run through `railway run --service judging-worker` so the deployed secret is injected.',
+        'Export it for this command only, or run through `railway run` on the live worker service ' +
+        'so the deployed secret is injected. AI_API_KEY is not used for OpenAI.',
     );
     process.exit(1);
   }
 
   const client = createAiClient({
     provider: 'openai',
-    model: MODEL,
+    model,
     apiKey,
     // One retry, so a single transient blip does not fail the check, while a
     // real fault still surfaces quickly rather than being masked.
     maxRetries: 1,
-    timeoutMs: 60_000,
+    timeoutMs: Number(process.env.AI_TIMEOUT_MS ?? 60_000),
   });
 
   const started = Date.now();
   let rateLimited = false;
+
+  console.log(`requested model          : ${model}`);
 
   try {
     const response = await client.run({
@@ -83,10 +101,12 @@ async function main() {
     const durationMs = Date.now() - started;
 
     console.log('request succeeded        : YES');
-    console.log(`returned model           : ${response.modelVersion}`);
+    console.log(`recorded model version   : ${response.modelVersion}`);
+    console.log(`provider served model    : ${response.providerModel ?? '(not reported)'}`);
     console.log(`input tokens             : ${response.usage.inputTokens}`);
     console.log(`cached input tokens      : ${response.usage.cachedInputTokens}`);
     console.log(`output tokens            : ${response.usage.outputTokens}`);
+    console.log(`  of which reasoning     : ${response.reasoningTokens}`);
     console.log(`OpenAI requests made     : ${response.usage.requests}`);
     console.log(`attempts                 : ${response.attempts}`);
     console.log(`rate-limit error         : ${rateLimited ? 'YES' : 'NO'}`);
@@ -107,7 +127,7 @@ async function main() {
     rateLimited = /429|rate limit/i.test(message);
 
     console.log('request succeeded        : NO');
-    console.log(`returned model           : ${MODEL} (requested)`);
+    console.log(`returned model           : ${model} (requested)`);
     console.log(`rate-limit error         : ${rateLimited ? 'YES' : 'NO'}`);
     console.log(`retryable                : ${error instanceof AiError ? error.retryable : 'unknown'}`);
     console.log(`structured validation    : FAIL`);
@@ -117,4 +137,7 @@ async function main() {
   }
 }
 
-void main();
+// Importable by its unit test without firing a request; runs under tsx and vite-node alike.
+if (!process.env.VITEST) {
+  void main();
+}

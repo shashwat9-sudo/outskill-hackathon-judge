@@ -57,9 +57,31 @@ export interface AiUsage {
 
 export interface AiResponse<T> {
   data: T;
+  /**
+   * The configured model name, recorded on every artefact.
+   *
+   * This is what the operator pinned (`AI_MODEL`), not the snapshot the
+   * provider happened to serve. Historical rows compare by this value, so it
+   * stays the stable, operator-chosen string.
+   */
   modelVersion: string;
+  /**
+   * What the provider said it served on the successful attempt, when it says.
+   * Diagnostic only — a smoke test prints it to prove the pinned name resolved
+   * to the model intended. Null for providers that do not report one.
+   */
+  providerModel: string | null;
   promptVersion: string;
   usage: AiUsage;
+  /**
+   * Reasoning tokens across every attempt, where the provider counts them.
+   *
+   * A subset of `usage.outputTokens`, not an addition to it. Reported so an
+   * operator can see how much of an output budget a reasoning model spent
+   * before it wrote the JSON — which is what decides whether `maxOutputTokens`
+   * is adequate for that model.
+   */
+  reasoningTokens: number;
   /** True when validation failed on every attempt and a degraded result was used. */
   degraded: boolean;
   attempts: number;
@@ -104,7 +126,15 @@ export function parseRetryAfter(header: string | null, now: number = Date.now())
 
 export interface AiCompletion {
   text: string;
-  usage: { inputTokens: number; cachedInputTokens?: number; outputTokens: number };
+  usage: {
+    inputTokens: number;
+    cachedInputTokens?: number;
+    outputTokens: number;
+    /** Counted inside `outputTokens` by providers that reason before answering. */
+    reasoningTokens?: number;
+  };
+  /** The model the provider reports having served, when its response names one. */
+  providerModel?: string;
   /**
    * True when the provider constrained decoding to the supplied JSON Schema.
    *
@@ -191,6 +221,8 @@ export class AiClient {
       outputTokens: 0,
       requests: 0,
     };
+    let reasoningTokens = 0;
+    let providerModel: string | null = null;
 
     for (let attempt = 1; attempt <= attemptsAllowed; attempt++) {
       const user =
@@ -219,6 +251,8 @@ export class AiClient {
           outputTokens: usage.outputTokens + result.usage.outputTokens,
           requests: usage.requests + 1,
         };
+        reasoningTokens += result.usage.reasoningTokens ?? 0;
+        providerModel = result.providerModel ?? providerModel;
       } catch (error) {
         if (error instanceof AiError && !error.retryable) throw error;
         usage = { ...usage, requests: usage.requests + 1 };
@@ -260,8 +294,10 @@ export class AiClient {
         return {
           data: validated.data,
           modelVersion: this.provider.modelVersion,
+          providerModel,
           promptVersion: request.promptVersion,
           usage,
+          reasoningTokens,
           degraded: false,
           attempts: attempt,
         };
@@ -514,8 +550,20 @@ class OpenAiResponsesProvider implements AiProvider {
      * nothing and is the difference between a five-minute fix and an hour.
      */
     if (json.status === 'incomplete') {
+      /*
+       * How far it got is part of the message. On a reasoning model the
+       * output budget is shared between thinking and the answer, so "stopped at
+       * max_output_tokens after 7,900 output tokens, 7,600 of them reasoning"
+       * tells the operator whether the budget or the prompt is the problem.
+       */
+      const spent = json.usage?.output_tokens;
+      const reasoned = json.usage?.output_tokens_details?.reasoning_tokens;
+      const detail =
+        spent === undefined
+          ? ''
+          : ` after ${spent} output tokens${reasoned === undefined ? '' : ` (${reasoned} reasoning)`}`;
       throw new AiError(
-        `OpenAI stopped early (${json.incomplete_details?.reason ?? 'unknown reason'}).`,
+        `OpenAI stopped early (${json.incomplete_details?.reason ?? 'unknown reason'})${detail}.`,
         false,
       );
     }
@@ -539,7 +587,9 @@ class OpenAiResponsesProvider implements AiProvider {
         inputTokens: json.usage?.input_tokens ?? 0,
         cachedInputTokens: json.usage?.input_tokens_details?.cached_tokens ?? 0,
         outputTokens: json.usage?.output_tokens ?? 0,
+        reasoningTokens: json.usage?.output_tokens_details?.reasoning_tokens ?? 0,
       },
+      providerModel: typeof json.model === 'string' ? json.model : undefined,
       usedStrictSchema: strict,
     };
   }
@@ -547,6 +597,8 @@ class OpenAiResponsesProvider implements AiProvider {
 
 interface OpenAiResponseBody {
   status?: string;
+  /** The model that served the response — a snapshot name, e.g. `gpt-6.1-sol-2026-10-14`. */
+  model?: string;
   error?: { message?: string };
   incomplete_details?: { reason?: string };
   output_text?: string;
@@ -558,6 +610,7 @@ interface OpenAiResponseBody {
     input_tokens?: number;
     output_tokens?: number;
     input_tokens_details?: { cached_tokens?: number };
+    output_tokens_details?: { reasoning_tokens?: number };
   };
 }
 

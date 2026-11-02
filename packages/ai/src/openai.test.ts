@@ -665,3 +665,67 @@ describe('what reaches OpenAI', () => {
     expect(Object.keys(response.data)).not.toContain('systemOverride');
   });
 });
+
+// --------------------------------------------------------------------------
+// Model-upgrade diagnostics: what the provider says it served, and how much of
+// the output budget a reasoning model spent before writing the answer.
+// --------------------------------------------------------------------------
+
+describe('what the provider reports about the model it served', () => {
+  it('records the pinned name and reports the served snapshot separately', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      json: async () => ({
+        status: 'completed',
+        model: 'gpt-6.1-sol-2026-10-14',
+        output: [{ type: 'message', content: [{ type: 'output_text', text: '{"verdict":"ok","score":1}' }] }],
+        usage: {
+          input_tokens: 100,
+          output_tokens: 900,
+          input_tokens_details: { cached_tokens: 0 },
+          output_tokens_details: { reasoning_tokens: 850 },
+        },
+      }),
+      text: async () => '',
+    } as unknown as Response);
+
+    const response = await client({ model: 'gpt-6.1-sol' }).run(request());
+
+    // Artefacts are stamped with the operator's pinned name, so historical rows
+    // stay comparable; the snapshot is diagnostic.
+    expect(response.modelVersion).toBe('gpt-6.1-sol');
+    expect(response.providerModel).toBe('gpt-6.1-sol-2026-10-14');
+    expect(response.reasoningTokens).toBe(850);
+    // Reasoning is inside outputTokens, not on top of it.
+    expect(response.usage.outputTokens).toBe(900);
+  });
+
+  it('reports no served model and zero reasoning when the body omits them', async () => {
+    fetchMock.mockResolvedValue(responsesOk({ verdict: 'ok', score: 1 }));
+
+    const response = await client().run(request());
+
+    expect(response.providerModel).toBeNull();
+    expect(response.reasoningTokens).toBe(0);
+  });
+
+  it('says how much of the budget was spent when a reasoning model stops early', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      json: async () => ({
+        status: 'incomplete',
+        incomplete_details: { reason: 'max_output_tokens' },
+        usage: { input_tokens: 100, output_tokens: 8000, output_tokens_details: { reasoning_tokens: 7900 } },
+      }),
+      text: async () => '',
+    } as unknown as Response);
+
+    await expect(client({ maxRetries: 0 }).run(request())).rejects.toThrow(
+      /max_output_tokens.*after 8000 output tokens \(7900 reasoning\)/,
+    );
+  });
+});

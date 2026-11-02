@@ -162,3 +162,20 @@ Enforced by test, not by convention.
 
 See `apps/worker/src/credential-boundary.test.ts` and
 `packages/shared/src/data/participant-boundary.test.ts`.
+
+---
+
+## 7. OpenAI in production (Responses API)
+
+The production worker judges with `AI_PROVIDER=openai`. Its key is
+`OPENAI_API_KEY` and nothing else: `AI_API_KEY` keeps the Gemini credential so
+a rollback is a change to `AI_PROVIDER` alone, and the worker refuses to start
+if `OPENAI_API_KEY` is missing rather than sending the Gemini key to OpenAI.
+
+`AI_MODEL` is mandatory for OpenAI — there is no default, because a batch must
+be judged by one pinned model. Change it only between cohorts, verify it first
+with `scripts/openai-smoke.ts --model <name>` and
+`scripts/controlled-ai-run.ts --provider openai --model <name>`, and record the
+change in `docs/AI_HANDOVER/MODEL_UPGRADE_*.md`. Current pin: `gpt-6.1-sol`
+(moved from `gpt-5.6-terra` after AIAP C15; see
+`docs/AI_HANDOVER/MODEL_UPGRADE_GPT61_SOL.md` for the rollback).
