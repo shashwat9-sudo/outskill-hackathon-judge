@@ -89,9 +89,35 @@ budget, or ran longer than ~40 s, raise only that stage's `maxOutputTokens`
 (pipeline.ts) or `AI_TIMEOUT_MS` on the worker, and re-run. Do not raise every
 budget.
 
-Result: recorded in the final report for this change. The run requires an
-OpenAI key in the local environment or `railway run` against the live
-service; neither is held on the preparation machine.
+### Results (2026-11-02, via `railway run --no-local` on the live service)
+
+Smoke test: served model `gpt-6.1-sol`, strict schema valid, 1 attempt,
+456 in / 64 out tokens, 5.5 s.
+
+Controlled run, three repetitions, every stage valid on the first attempt,
+all eight categories scored within their ceilings, feedback safety check
+passed, planted PII and credential removed from every payload:
+
+| Stage | Budget | Output tokens (reasoning) | Latency |
+| --- | --- | --- | --- |
+| Artifact analysis | 4,096 | 600–635 (84–100) | 10–12 s |
+| Test-plan generation | 8,000 | 4,469–5,271 (778–956) | 48–57 s |
+| Scoring, 8 categories | 8,000 | 2,121–2,161 (142–260) | 32–33 s |
+| Feedback | 4,096 | 844–908 (98–146) | 15–17 s |
+
+About 10.5k input and 8.1k output tokens per submission, of which ~1.2k are
+reasoning; $0.09–0.10 per submission at list price, roughly $4 per 40 teams
+before the top-20 consistency pass. Output budgets are adequate (the largest
+use is 66% of the test-plan budget).
+
+The timeout was not. Test-plan generation ran to 95% of the 60 s limit on a
+small fictional submission; a real one with a longer declared workflow would
+abort, retry twice at 60 s each, and fail the job. Under gpt-5.6-terra every
+C15 job completed in one attempt with no timeout ever recorded, so this is
+new behaviour of the new model. The one configuration change made:
+`AI_TIMEOUT_MS=120000` on the live worker service. Output budgets, retries
+and prompts are unchanged. A fourth run through the service's injected
+environment confirmed the value reaches the adapter.
 
 ## Cutover
 
@@ -102,7 +128,10 @@ into project **lucky-dedication / production** (commit status
 leftover and must not be redeployed.
 
 Variables on the live service: `AI_PROVIDER=openai`, `AI_MODEL=gpt-6.1-sol`,
-`AI_EVALUATION_MODE=production`, `OPENAI_API_KEY` unchanged. Saving the
+`AI_EVALUATION_MODE=production`, `AI_TIMEOUT_MS=120000`, `OPENAI_API_KEY`
+unchanged. The project belongs to a different Railway account from the one
+that owns the dormant worker project; log the CLI in as that account (device
+code approved from wherever it is signed in) before `railway run`. Saving the
 variable redeploys the service. Vercel is untouched: the web tier holds no AI
 configuration and reads the model from the worker's own report.
 
@@ -117,7 +146,8 @@ Only `AI_MODEL` moves back:
 
 1. Railway → project lucky-dedication → the worker service → Variables.
 2. Set `AI_MODEL=gpt-5.6-terra`. Leave `AI_PROVIDER`, `OPENAI_API_KEY` and
-   `AI_EVALUATION_MODE` as they are.
+   `AI_EVALUATION_MODE` as they are. `AI_TIMEOUT_MS=120000` can stay: the
+   old model never approached 60 s, so the wider limit is harmless to it.
 3. Save; Railway redeploys. The worker finishes in-flight work on SIGTERM,
    restarts, and reports the model it is now using within a minute.
 4. Confirm on Admin → Judging: "Production judging — openai (gpt-5.6-terra)".
